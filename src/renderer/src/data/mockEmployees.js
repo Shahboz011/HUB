@@ -25,14 +25,14 @@ const DEPARTMENTS = [
 
 const POSITIONS = {
   Engineering: ['Senior Engineer', 'Junior Engineer', 'Tech Lead', 'Architect', 'DevOps'],
-  Product: ['Product Manager', 'Product Owner', 'Business Analyst', 'Scrum Master'],
-  Design: ['UI Designer', 'UX Designer', 'Visual Designer', 'Design Lead'],
-  Marketing: ['Marketing Manager', 'Content Strategist', 'SEO Specialist', 'Brand Manager'],
-  Sales: ['Account Executive', 'Sales Rep', 'Sales Manager', 'Business Dev'],
-  Finance: ['Financial Analyst', 'Accountant', 'CFO Assistant', 'Controller'],
-  HR: ['HR Manager', 'Recruiter', 'HR Generalist', 'Talent Acquisition'],
-  Operations: ['Operations Manager', 'Logistics Coordinator', 'Analyst', 'Specialist'],
-  Legal: ['Legal Counsel', 'Paralegal', 'Compliance Officer', 'Contract Specialist'],
+  Product:     ['Product Manager', 'Product Owner', 'Business Analyst', 'Scrum Master'],
+  Design:      ['UI Designer', 'UX Designer', 'Visual Designer', 'Design Lead'],
+  Marketing:   ['Marketing Manager', 'Content Strategist', 'SEO Specialist', 'Brand Manager'],
+  Sales:       ['Account Executive', 'Sales Rep', 'Sales Manager', 'Business Dev'],
+  Finance:     ['Financial Analyst', 'Accountant', 'CFO Assistant', 'Controller'],
+  HR:          ['HR Manager', 'Recruiter', 'HR Generalist', 'Talent Acquisition'],
+  Operations:  ['Operations Manager', 'Logistics Coordinator', 'Analyst', 'Specialist'],
+  Legal:       ['Legal Counsel', 'Paralegal', 'Compliance Officer', 'Contract Specialist'],
   'Customer Success': ['CS Manager', 'Support Specialist', 'Account Manager', 'Onboarding Lead'],
 }
 
@@ -49,12 +49,11 @@ export function generateMockEmployees(count = 300) {
   for (let i = 0; i < count; i++) {
     const rand = seededRandom(i * 7919 + 31337)
     const firstName = FIRST_NAMES[Math.floor(rand() * FIRST_NAMES.length)]
-    const lastName = LAST_NAMES[Math.floor(rand() * LAST_NAMES.length)]
+    const lastName  = LAST_NAMES[Math.floor(rand() * LAST_NAMES.length)]
     const department = DEPARTMENTS[Math.floor(rand() * DEPARTMENTS.length)]
-    const positions = POSITIONS[department]
-    const position = positions[Math.floor(rand() * positions.length)]
+    const positions  = POSITIONS[department]
+    const position   = positions[Math.floor(rand() * positions.length)]
     const hoursWorked = Math.round((120 + rand() * 60) * 10) / 10
-    const hourlyRate = Math.round((15 + rand() * 85) * 100) / 100
 
     employees.push({
       id: `EMP-${String(i + 1).padStart(4, '0')}`,
@@ -62,7 +61,6 @@ export function generateMockEmployees(count = 300) {
       department,
       position,
       hoursWorked,
-      hourlyRate,
       bonuses: 0,
       fines: 0,
       avatar: `${firstName[0]}${lastName[0]}`,
