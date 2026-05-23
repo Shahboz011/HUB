@@ -1,6 +1,70 @@
-const { app, BrowserWindow, shell, dialog } = require('electron')
+const { app, BrowserWindow, shell, dialog, ipcMain, clipboard } = require('electron')
 const { join } = require('path')
 const { autoUpdater } = require('electron-updater')
+const https = require('https')
+const crypto = require('crypto')
+
+const SUPABASE_URL = 'oewfgyiuyeetsxebowaa.supabase.co'
+const SERVICE_KEY  = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9ld2ZneWl1eWVldHN4ZWJvd2FhIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3OTUzNTE3MywiZXhwIjoyMDk1MTExMTczfQ.rWCGISd8zfe-gkgVDBGaz5SCP0lVsiWhyZX4FgJ-c3A'
+
+function generateTempPassword() {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
+  let pwd = 'SCC-'
+  for (let i = 0; i < 6; i++) pwd += chars[crypto.randomInt(chars.length)]
+  return pwd
+}
+
+function supabaseAdminPost(path, body) {
+  return new Promise((resolve, reject) => {
+    const payload = JSON.stringify(body)
+    const options = {
+      hostname: SUPABASE_URL,
+      path,
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${SERVICE_KEY}`,
+        'apikey': SERVICE_KEY,
+        'Content-Length': Buffer.byteLength(payload),
+      },
+    }
+    const req = https.request(options, (res) => {
+      let data = ''
+      res.on('data', chunk => { data += chunk })
+      res.on('end', () => {
+        try { resolve({ status: res.statusCode, body: JSON.parse(data) }) }
+        catch { resolve({ status: res.statusCode, body: data }) }
+      })
+    })
+    req.on('error', reject)
+    req.write(payload)
+    req.end()
+  })
+}
+
+// IPC: create a new member without sending any email
+ipcMain.handle('invite-member', async (_event, { email, department, position, hourly_rate }) => {
+  const tempPassword = generateTempPassword()
+  const result = await supabaseAdminPost('/auth/v1/admin/users', {
+    email,
+    password: tempPassword,
+    email_confirm: true,         // skip email confirmation
+    user_metadata: { department, position, hourly_rate },
+  })
+
+  if (result.status === 200 || result.status === 201) {
+    return { ok: true, tempPassword }
+  }
+
+  // User already exists — just return error so admin knows
+  const msg = result.body?.msg || result.body?.message || result.body?.error_description || 'Unknown error'
+  return { ok: false, error: msg }
+})
+
+// IPC: copy text to clipboard
+ipcMain.handle('copy-to-clipboard', (_event, text) => {
+  clipboard.writeText(text)
+})
 
 const PROTOCOL = 'salary-app'
 let win = null

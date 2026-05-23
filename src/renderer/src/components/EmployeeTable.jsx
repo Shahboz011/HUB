@@ -1,7 +1,9 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { FixedSizeList as List } from 'react-window'
 import AutoSizer from 'react-virtualized-auto-sizer'
+import { Search, History } from 'lucide-react'
 import { supabase } from '../lib/supabase'
+import AttendanceView from './AttendanceView'
 
 const DEPT_COLORS = [
   '#6366f1','#8b5cf6','#ec4899','#f59e0b','#10b981',
@@ -24,6 +26,15 @@ function calcSalary(hours, rate, bonuses, fines) {
   return Math.max(0, Number(hours) * Number(rate) + Number(bonuses) - Number(fines))
 }
 
+function sessionElapsed(startedAt) {
+  const secs = Math.floor((Date.now() - new Date(startedAt).getTime()) / 1000)
+  const h = Math.floor(secs / 3600)
+  const m = Math.floor((secs % 3600) / 60)
+  const s = secs % 60
+  if (h > 0) return `${h}h ${String(m).padStart(2, '0')}m`
+  return `${m}m ${String(s).padStart(2, '0')}s`
+}
+
 function AvatarBadge({ name, department }) {
   const color = deptColor(department)
   const initials = name ? name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase() : '?'
@@ -35,11 +46,14 @@ function AvatarBadge({ name, department }) {
 }
 
 function TableRow({ index, style, data }) {
-  const { employees, onFieldChange } = data
+  const { employees, onFieldChange, activeSessions, onViewHistory } = data
   const emp = employees[index]
   const isEven = index % 2 === 0
   const color = deptColor(emp.department)
   const salary = calcSalary(emp.hours_worked, emp.hourly_rate, emp.bonuses, emp.fines)
+  const session = activeSessions[emp.id]
+  const rate = Number(emp.hourly_rate) || 0
+  const sessionEarned = session ? ((Date.now() - new Date(session.started_at).getTime()) / 3600000) * rate : 0
 
   return (
     <div style={style} className={`table-row ${isEven ? 'row-even' : 'row-odd'}`}>
@@ -63,8 +77,18 @@ function TableRow({ index, style, data }) {
         )}
       </div>
 
-      <div className="col col-position">
-        <span className="position-text">{emp.position || '—'}</span>
+      <div className="col col-live">
+        {session ? (
+          <div className="live-badge">
+            <span className="live-badge-dot" />
+            <div className="live-badge-info">
+              <span className="live-badge-time">{sessionElapsed(session.started_at)}</span>
+              <span className="live-badge-earned">{fmt(sessionEarned)}</span>
+            </div>
+          </div>
+        ) : (
+          <span className="live-badge-off">Offline</span>
+        )}
       </div>
 
       <div className="col col-input">
@@ -101,6 +125,13 @@ function TableRow({ index, style, data }) {
       <div className="col col-salary">
         <span className="salary-value">{fmt(salary)}</span>
       </div>
+
+      <div className="col col-view">
+        <button className="view-hist-btn" onClick={() => onViewHistory(emp)} title="View attendance history">
+          <History size={14} />
+          History
+        </button>
+      </div>
     </div>
   )
 }
@@ -111,12 +142,13 @@ function TableHeader() {
       <div className="col col-index">#</div>
       <div className="col col-employee">Employee</div>
       <div className="col col-dept">Department</div>
-      <div className="col col-position">Position</div>
+      <div className="col col-live">Live Status</div>
       <div className="col col-input">Hours</div>
       <div className="col col-rate">Rate</div>
       <div className="col col-input">Bonus ($)</div>
       <div className="col col-input">Fine ($)</div>
       <div className="col col-salary">Net Salary</div>
+      <div className="col col-view" />
     </div>
   )
 }
@@ -162,15 +194,65 @@ function SummaryBar({ employees }) {
 
 export default function EmployeeTable({ departments }) {
   const [employees, setEmployees] = useState([])
+  const [activeSessions, setActiveSessions] = useState({})
+  const [, setTick] = useState(0)
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
   const [filterDept, setFilterDept] = useState('All')
   const [saving, setSaving] = useState(false)
+  const [selectedEmployee, setSelectedEmployee] = useState(null)
   const debounceRefs = useRef({})
 
   useEffect(() => {
-    supabase.from('profiles').select('*').order('full_name')
-      .then(({ data }) => { if (data) setEmployees(data); setLoading(false) })
+    Promise.all([
+      supabase.from('profiles').select('*').order('full_name'),
+      supabase.from('work_sessions').select('*').is('ended_at', null),
+    ]).then(([{ data: profiles }, { data: sessions }]) => {
+      if (profiles) setEmployees(profiles)
+      if (sessions) {
+        const map = {}
+        sessions.forEach(s => { map[s.employee_id] = s })
+        setActiveSessions(map)
+      }
+      setLoading(false)
+    })
+
+    // Realtime: employee profile changes (dept/rate assigned, hours updated)
+    const profileSub = supabase
+      .channel('admin-profiles')
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'profiles' },
+        ({ new: row }) => setEmployees(prev => [...prev, row].sort((a, b) => (a.full_name || '').localeCompare(b.full_name || ''))))
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'profiles' },
+        ({ new: row }) => setEmployees(prev => prev.map(e => e.id === row.id ? row : e)))
+      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'profiles' },
+        ({ old: row }) => setEmployees(prev => prev.filter(e => e.id !== row.id)))
+      .subscribe()
+
+    // Realtime: clock-in / clock-out events
+    const sessionSub = supabase
+      .channel('admin-sessions')
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'work_sessions' },
+        ({ new: row }) => {
+          if (!row.ended_at) setActiveSessions(prev => ({ ...prev, [row.employee_id]: row }))
+        })
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'work_sessions' },
+        ({ new: row }) => {
+          if (row.ended_at) {
+            setActiveSessions(prev => { const next = { ...prev }; delete next[row.employee_id]; return next })
+          }
+        })
+      .subscribe()
+
+    return () => {
+      supabase.removeChannel(profileSub)
+      supabase.removeChannel(sessionSub)
+    }
+  }, [])
+
+  // Drive live badge re-renders
+  useEffect(() => {
+    const id = setInterval(() => setTick(t => t + 1), 1000)
+    return () => clearInterval(id)
   }, [])
 
   const onFieldChange = useCallback((id, field, value) => {
@@ -195,13 +277,15 @@ export default function EmployeeTable({ departments }) {
 
   if (loading) return <div className="table-loading">Loading employees…</div>
 
+  if (selectedEmployee) {
+    return <AttendanceView employee={selectedEmployee} onBack={() => setSelectedEmployee(null)} />
+  }
+
   return (
     <div className="table-container">
       <div className="toolbar">
         <div className="search-wrap">
-          <svg className="search-icon" viewBox="0 0 20 20" fill="currentColor">
-            <path fillRule="evenodd" d="M8 4a4 4 0 100 8 4 4 0 000-8zM2 8a6 6 0 1110.89 3.476l4.817 4.817a1 1 0 01-1.414 1.414l-4.816-4.816A6 6 0 012 8z" clipRule="evenodd" />
-          </svg>
+          <Search size={14} className="search-icon" />
           <input
             type="text" placeholder="Search by name or email…"
             value={search} onChange={e => setSearch(e.target.value)}
@@ -230,7 +314,12 @@ export default function EmployeeTable({ departments }) {
         ) : (
           <AutoSizer>
             {({ height, width }) => (
-              <List height={height} width={width} itemCount={filtered.length} itemSize={52} itemData={{ employees: filtered, onFieldChange }} overscanCount={10}>
+              <List
+                height={height} width={width}
+                itemCount={filtered.length} itemSize={52}
+                itemData={{ employees: filtered, onFieldChange, activeSessions, onViewHistory: setSelectedEmployee }}
+                overscanCount={10}
+              >
                 {TableRow}
               </List>
             )}

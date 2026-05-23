@@ -1,6 +1,6 @@
 {
   "name": "salary-command-center",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "description": "Salary Command Center — professional payroll dashboard",
   "author": "Shahboz Nurullaev",
   "main": "out/main/index.js",
@@ -28,7 +28,12 @@
     },
     "win": {
       "target": [
-        { "target": "nsis", "arch": ["x64"] }
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
       ]
     },
     "nsis": {
@@ -41,6 +46,7 @@
   "dependencies": {
     "@supabase/supabase-js": "^2.106.1",
     "electron-updater": "^6.8.3",
+    "lucide-react": "^1.16.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-virtualized-auto-sizer": "^1.0.24",
@@ -51,6 +57,7 @@
     "electron": "^31.7.7",
     "electron-builder": "^25.1.8",
     "electron-vite": "^2.3.0",
+    "playwright": "^1.60.0",
     "vite": "^5.4.11"
   }
 }
