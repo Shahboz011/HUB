@@ -218,11 +218,11 @@ function ScreenshotsSection({ employeeId }) {
         .order('taken_at', { ascending: false })
         .limit(48)
       if (error || !data?.length) { setLoading(false); return }
-      const { data: urls } = await supabase.storage
-        .from('screenshots')
-        .createSignedUrls(data.map(s => s.path), 3600)
-      if (urls) {
-        setScreenshots(data.map((s, i) => ({ ...s, url: urls[i]?.signedUrl })).filter(s => s.url))
+      const signedUrls = window.electronAPI?.signScreenshotUrls
+        ? await window.electronAPI.signScreenshotUrls(data.map(s => s.path))
+        : null
+      if (signedUrls) {
+        setScreenshots(data.map((s, i) => ({ ...s, url: signedUrls[i] })).filter(s => s.url))
       }
       setLoading(false)
     }

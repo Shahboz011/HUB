@@ -88,6 +88,38 @@ ipcMain.handle('delete-member', async (_event, { userId }) => {
 // IPC: get app version
 ipcMain.handle('get-version', () => app.getVersion())
 
+// IPC: generate signed screenshot URLs using service key (bypasses RLS for admin view)
+ipcMain.handle('sign-screenshot-urls', async (_event, paths) => {
+  const payload = JSON.stringify({ expiresIn: 3600, paths })
+  return new Promise((resolve) => {
+    const options = {
+      hostname: SUPABASE_URL,
+      path: '/storage/v1/object/sign/screenshots',
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${SERVICE_KEY}`,
+        'apikey': SERVICE_KEY,
+        'Content-Length': Buffer.byteLength(payload),
+      },
+    }
+    const req = https.request(options, (res) => {
+      let data = ''
+      res.on('data', chunk => { data += chunk })
+      res.on('end', () => {
+        try {
+          const arr = JSON.parse(data)
+          resolve(arr.map(item => item.signedURL
+            ? `https://${SUPABASE_URL}/storage/v1${item.signedURL}` : null))
+        } catch { resolve(paths.map(() => null)) }
+      })
+    })
+    req.on('error', () => resolve(paths.map(() => null)))
+    req.write(payload)
+    req.end()
+  })
+})
+
 // IPC: capture screen via desktopCapturer (main process — more reliable than preload)
 ipcMain.handle('capture-screen', async () => {
   try {
