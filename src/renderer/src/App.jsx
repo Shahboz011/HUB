@@ -209,7 +209,7 @@ export default function App() {
       <main className="app-main">
         {activeTab === 'employees' ? <EmployeeTable departments={departments} />
           : activeTab === 'salary' ? <SalaryReport />
-          : <AdminPanel departments={departments} onDepartmentsChange={setDepartments} />
+          : <AdminPanel departments={departments} onDepartmentsChange={setDepartments} currentUserId={profile?.id} />
         }
       </main>
 

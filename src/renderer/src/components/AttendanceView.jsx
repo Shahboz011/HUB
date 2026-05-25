@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react'
-import { ArrowLeft, ClipboardList, Clock, CalendarDays, DollarSign, PiggyBank, Camera } from 'lucide-react'
+import { useState, useEffect, useCallback } from 'react'
+import { ArrowLeft, ClipboardList, Clock, CalendarDays, DollarSign, PiggyBank, Camera, RefreshCw, XCircle, Trash2 } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 
 const DEPT_COLORS = [
@@ -37,6 +37,8 @@ function groupByMonth(sessions) {
 export default function AttendanceView({ employee, onBack }) {
   const [sessions, setSessions] = useState([])
   const [loading, setLoading] = useState(true)
+  const [sessionError, setSessionError] = useState('')
+  const [closingSessionId, setClosingSessionId] = useState(null)
 
   const rate = Number(employee.hourly_rate) || 0
   const color = deptColor(employee.department)
@@ -50,8 +52,50 @@ export default function AttendanceView({ employee, onBack }) {
       .select('*')
       .eq('employee_id', employee.id)
       .order('started_at', { ascending: false })
-      .then(({ data }) => { if (data) setSessions(data); setLoading(false) })
+      .then(({ data, error }) => {
+        if (!error && data) setSessions(data)
+        setLoading(false)
+      })
   }, [employee.id])
+
+  async function closeSession(session) {
+    const now = new Date()
+    const totalSecs = (now - new Date(session.started_at)) / 1000
+    const durationHours = totalSecs / 3600
+    const hrs = Math.floor(durationHours)
+    const mins = Math.round((durationHours - hrs) * 60)
+    const durationLabel = hrs > 0 ? `${hrs}h ${mins}m` : `${mins}m`
+
+    const confirmed = window.confirm(
+      `Close session for ${employee.full_name || employee.email}?\n\nElapsed: ${durationLabel} (wall-clock time since clock-in).\nThis will be saved as their worked duration.\n\nClick OK to confirm.`
+    )
+    if (!confirmed) return
+
+    setClosingSessionId(session.id)
+    setSessionError('')
+
+    const { error: sessionErr } = await supabase.from('work_sessions').update({
+      ended_at: now.toISOString(),
+      duration_hours: durationHours,
+    }).eq('id', session.id)
+
+    if (sessionErr) {
+      setSessionError(`Failed to close session: ${sessionErr.message}`)
+      setClosingSessionId(null)
+      return
+    }
+
+    const newHours = Number(employee.hours_worked) + durationHours
+    const { error: profileErr } = await supabase.from('profiles').update({ hours_worked: newHours }).eq('id', employee.id)
+    if (profileErr) {
+      setSessionError(`Session closed but hours update failed: ${profileErr.message}`)
+    }
+
+    setSessions(prev => prev.map(s =>
+      s.id === session.id ? { ...s, ended_at: now.toISOString(), duration_hours: durationHours } : s
+    ))
+    setClosingSessionId(null)
+  }
 
   const completed = sessions.filter(s => s.ended_at)
   const totalHours = completed.reduce((sum, s) => sum + (Number(s.duration_hours) || 0), 0)
@@ -124,10 +168,14 @@ export default function AttendanceView({ employee, onBack }) {
         <div className="att-stat-divider" />
         <div className="att-stat">
           <PiggyBank size={20} className="att-stat-icon" />
-          <span className="att-stat-value att-val-purple">{fmt(totalHours * rate)}</span>
+          <span className="att-stat-value att-val-purple">{fmt(Math.max(0, totalHours * rate + Number(employee.bonuses) - Number(employee.fines)))}</span>
           <span className="att-stat-label">All-Time Earnings</span>
         </div>
       </div>
+
+      {sessionError && (
+        <p className="bf-error" style={{ margin: '8px 0 0' }}>{sessionError}</p>
+      )}
 
       {/* Session list */}
       <div className="att-sessions-wrap">
@@ -154,6 +202,7 @@ export default function AttendanceView({ employee, onBack }) {
                     <span className="att-col-out">Clock Out</span>
                     <span className="att-col-dur">Duration</span>
                     <span className="att-col-earn">Earned</span>
+                    <span style={{ width: 110 }} />
                   </div>
 
                   {monthSessions.map((s, i) => {
@@ -184,6 +233,20 @@ export default function AttendanceView({ employee, onBack }) {
                             ? <span className="att-muted">In progress</span>
                             : <span className="att-earn-val">{fmt(hours * rate)}</span>}
                         </div>
+                        <div style={{ width: 110, display: 'flex', justifyContent: 'flex-end' }}>
+                          {isActive && (
+                            <button
+                              className="dept-remove-btn"
+                              style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, color: 'var(--negative)', opacity: closingSessionId === s.id ? 0.5 : 1 }}
+                              onClick={() => closeSession(s)}
+                              disabled={closingSessionId !== null}
+                              title="Close this session on behalf of the employee"
+                            >
+                              <XCircle size={12} />
+                              {closingSessionId === s.id ? 'Closing…' : 'Close Session'}
+                            </button>
+                          )}
+                        </div>
                       </div>
                     )
                   })}
@@ -207,27 +270,36 @@ export default function AttendanceView({ employee, onBack }) {
 function ScreenshotsSection({ employeeId }) {
   const [screenshots, setScreenshots] = useState([])
   const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
   const [expanded, setExpanded] = useState(null)
 
-  useEffect(() => {
-    async function load() {
-      const { data, error } = await supabase
-        .from('screenshots')
-        .select('*')
-        .eq('employee_id', employeeId)
-        .order('taken_at', { ascending: false })
-        .limit(48)
-      if (error || !data?.length) { setLoading(false); return }
+  const load = useCallback(async (isRefresh = false) => {
+    if (isRefresh) setRefreshing(true)
+    else setLoading(true)
+
+    const { data, error } = await supabase
+      .from('screenshots')
+      .select('*')
+      .eq('employee_id', employeeId)
+      .order('taken_at', { ascending: false })
+      .limit(48)
+
+    if (!error && data?.length) {
       const dataUrls = window.electronAPI?.fetchScreenshotImages
         ? await window.electronAPI.fetchScreenshotImages(data.map(s => s.path))
         : null
       if (dataUrls) {
         setScreenshots(data.map((s, i) => ({ ...s, url: dataUrls[i] })).filter(s => s.url))
       }
-      setLoading(false)
+    } else if (!isRefresh) {
+      setScreenshots([])
     }
-    load()
+
+    setLoading(false)
+    setRefreshing(false)
   }, [employeeId])
+
+  useEffect(() => { load(false) }, [load])
 
   return (
     <div className="bf-wrap">
@@ -241,6 +313,15 @@ function ScreenshotsSection({ employeeId }) {
             </span>
           )}
         </h3>
+        <button
+          onClick={() => load(true)}
+          disabled={loading || refreshing}
+          style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, color: 'var(--text-muted)', background: 'none', border: 'none', cursor: (loading || refreshing) ? 'default' : 'pointer', padding: '2px 6px' }}
+          title="Refresh screenshots"
+        >
+          <RefreshCw size={13} style={{ opacity: (loading || refreshing) ? 0.4 : 1 }} />
+          {refreshing ? 'Refreshing…' : 'Refresh'}
+        </button>
       </div>
 
       {loading ? (
@@ -289,6 +370,7 @@ function BonusFineSection({ employee }) {
   const [note, setNote] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  const [confirmDeleteTxId, setConfirmDeleteTxId] = useState(null)
   const [localTotals, setLocalTotals] = useState({ bonuses: Number(employee.bonuses) || 0, fines: Number(employee.fines) || 0 })
 
   useEffect(() => {
@@ -308,17 +390,25 @@ function BonusFineSection({ employee }) {
       .select().single()
     if (err) { setError(err.message); setSaving(false); return }
 
-    // Update profile aggregate
     const field = type === 'bonus' ? 'bonuses' : 'fines'
-    setLocalTotals(prev => {
-      const next = { ...prev, [field]: prev[field] + amt }
-      supabase.from('profiles').update({ [field]: next[field] }).eq('id', employee.id)
-      return next
-    })
+    const next = { ...localTotals, [field]: localTotals[field] + amt }
+    setLocalTotals(next)
+    await supabase.from('profiles').update({ [field]: next[field] }).eq('id', employee.id)
 
     setTransactions(prev => [tx, ...prev])
     setAmount(''); setNote('')
     setSaving(false)
+  }
+
+  async function deleteTransaction(tx) {
+    await supabase.from('transactions').delete().eq('id', tx.id)
+    const field = tx.type === 'bonus' ? 'bonuses' : 'fines'
+    const newTotal = Math.max(0, localTotals[field] - tx.amount)
+    const next = { ...localTotals, [field]: newTotal }
+    setLocalTotals(next)
+    await supabase.from('profiles').update({ [field]: newTotal }).eq('id', employee.id)
+    setTransactions(prev => prev.filter(t => t.id !== tx.id))
+    setConfirmDeleteTxId(null)
   }
 
   const totalBonus = localTotals.bonuses
@@ -375,6 +465,7 @@ function BonusFineSection({ employee }) {
             <span className="bf-lh-type">Type</span>
             <span className="bf-lh-note">Reason</span>
             <span className="bf-lh-amt">Amount</span>
+            <span style={{ width: 60 }} />
           </div>
           {transactions.map(tx => (
             <div key={tx.id} className={`bf-row bf-row-${tx.type}`}>
@@ -386,6 +477,18 @@ function BonusFineSection({ employee }) {
               <span className="bf-row-note">{tx.note || <span style={{ color: 'var(--text-muted)' }}>—</span>}</span>
               <span className={`bf-row-amt bf-amt-${tx.type}`}>
                 {tx.type === 'bonus' ? '+' : '−'}{fmt(tx.amount)}
+              </span>
+              <span style={{ width: 60, display: 'flex', justifyContent: 'flex-end' }}>
+                {confirmDeleteTxId === tx.id ? (
+                  <span style={{ display: 'flex', gap: 4 }}>
+                    <button className="dept-remove-btn dept-delete-confirm-btn" style={{ fontSize: 10, padding: '2px 6px' }} onClick={() => deleteTransaction(tx)}>Remove?</button>
+                    <button className="dept-remove-btn" style={{ fontSize: 10, padding: '2px 6px' }} onClick={() => setConfirmDeleteTxId(null)}>No</button>
+                  </span>
+                ) : (
+                  <button className="dept-remove-btn dept-delete-icon-btn" style={{ opacity: 0.5 }} onClick={() => setConfirmDeleteTxId(tx.id)} title="Delete this entry">
+                    <Trash2 size={12} />
+                  </button>
+                )}
               </span>
             </div>
           ))}

@@ -10,8 +10,8 @@ function fmt(v) {
 function calcHours(empId, sessionsMap) {
   const sessions = sessionsMap[empId] || []
   return sessions.reduce((sum, s) => {
-    if (s.ended_at) return sum + (Number(s.duration_hours) || 0)
-    return sum + (Date.now() - new Date(s.started_at).getTime()) / 3600000
+    if (!s.ended_at) return sum // skip open sessions — not yet finalized
+    return sum + (Number(s.duration_hours) || 0)
   }, 0)
 }
 
@@ -28,7 +28,7 @@ export default function SalaryReport() {
   useEffect(() => {
     async function load() {
       const [{ data: profiles }, { data: sessions }] = await Promise.all([
-        supabase.from('profiles').select('*').order('full_name'),
+        supabase.from('profiles').select('*').neq('role', 'admin').order('full_name'),
         supabase.from('work_sessions').select('*'),
       ])
       if (profiles) setEmployees(profiles)
@@ -248,7 +248,7 @@ export default function SalaryReport() {
           <span className="sr-col-emp sr-grand-label">Grand Total</span>
           <span className="sr-col-pos" />
           <span className="sr-col-rate" />
-          <span className="sr-col-hrs sr-mono">{grandHours.toFixed(1)}h</span>
+          <span className="sr-col-hrs sr-mono">{grandHours.toFixed(2)}h</span>
           <span className="sr-col-base sr-mono">{fmt(employees.reduce((s,e) => s + calcHours(e.id, sessionsMap)*Number(e.hourly_rate), 0))}</span>
           <span className="sr-col-bonus sr-positive">{grandBonuses > 0 ? `+${fmt(grandBonuses)}` : '—'}</span>
           <span className="sr-col-fine sr-negative">{grandFines > 0 ? `-${fmt(grandFines)}` : '—'}</span>

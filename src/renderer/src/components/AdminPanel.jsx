@@ -9,6 +9,10 @@ const electronAPI = window.electronAPI ?? {
   copyToClipboard: async (text) => { try { await navigator.clipboard.writeText(text) } catch {} },
 }
 
+function isValidEmail(email) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
+}
+
 const DEPT_COLORS = [
   '#6366f1','#8b5cf6','#ec4899','#f59e0b','#10b981',
   '#3b82f6','#14b8a6','#f97316','#ef4444','#06b6d4',
@@ -25,7 +29,7 @@ function initials(name) {
 }
 
 // ── Department detail: members + invite ──────────────────────────────────────
-function DeptMembers({ dept, employees, departments, onBack, onEmployeeUpdate, onEmployeeDelete }) {
+function DeptMembers({ dept, employees, departments, onBack, onEmployeeUpdate, onEmployeeDelete, currentUserId }) {
   const [showInvite, setShowInvite] = useState(false)
   const [invEmail, setInvEmail] = useState('')
   const [invPosition, setInvPosition] = useState('')
@@ -142,7 +146,7 @@ function DeptMembers({ dept, employees, departments, onBack, onEmployeeUpdate, o
             <button
               className="dept-add-btn"
               onClick={sendInvite}
-              disabled={inviting || !invEmail.trim()}
+              disabled={inviting || !isValidEmail(invEmail.trim())}
             >
               {inviting ? 'Creating…' : 'Add Member'}
             </button>
@@ -214,9 +218,11 @@ function DeptMembers({ dept, employees, departments, onBack, onEmployeeUpdate, o
                   ) : (
                     <div style={{ display: 'flex', gap: 6 }}>
                       <button className="dept-remove-btn" onClick={() => removeMember(emp)} title="Remove from department">Remove</button>
-                      <button className="dept-remove-btn dept-delete-icon-btn" onClick={() => { setConfirmDeleteId(emp.id); setDeleteErr('') }} title="Delete user permanently">
-                        <Trash2 size={13} />
-                      </button>
+                      {emp.id !== currentUserId && (
+                        <button className="dept-remove-btn dept-delete-icon-btn" onClick={() => { setConfirmDeleteId(emp.id); setDeleteErr('') }} title="Delete user permanently">
+                          <Trash2 size={13} />
+                        </button>
+                      )}
                     </div>
                   )}
                 </div>
@@ -231,7 +237,7 @@ function DeptMembers({ dept, employees, departments, onBack, onEmployeeUpdate, o
 }
 
 // ── Main AdminPanel ───────────────────────────────────────────────────────────
-export default function AdminPanel({ departments, onDepartmentsChange }) {
+export default function AdminPanel({ departments, onDepartmentsChange, currentUserId }) {
   const [activeSection, setActiveSection] = useState('departments')
   const [selectedDept, setSelectedDept] = useState(null)
   const [employees, setEmployees] = useState([])
@@ -324,8 +330,11 @@ export default function AdminPanel({ departments, onDepartmentsChange }) {
     )
 
     setInvCredentials({ email: invEmail.trim(), tempPassword: result.tempPassword })
-    setInvEmail(''); setInvPosition(''); setInvRate('')
+    setInvEmail(''); setInvDept(''); setInvPosition(''); setInvRate('')
     setInviting(false)
+    // Refresh member list so the new user appears immediately
+    const { data: fresh } = await supabase.from('profiles').select('*').order('full_name')
+    if (fresh) setEmployees(fresh)
   }
 
   async function copyInvCredentials() {
@@ -355,6 +364,7 @@ export default function AdminPanel({ departments, onDepartmentsChange }) {
         onBack={() => setSelectedDept(null)}
         onEmployeeUpdate={updateLocalEmployee}
         onEmployeeDelete={removeLocalEmployee}
+        currentUserId={currentUserId}
       />
     )
   }
@@ -478,7 +488,7 @@ export default function AdminPanel({ departments, onDepartmentsChange }) {
               <button
                 className="dept-add-btn"
                 onClick={sendInvite}
-                disabled={inviting || !invEmail.trim()}
+                disabled={inviting || !isValidEmail(invEmail.trim())}
               >
                 {inviting ? 'Creating…' : 'Add Member'}
               </button>
@@ -587,28 +597,39 @@ export default function AdminPanel({ departments, onDepartmentsChange }) {
 
                     <select
                       value={emp.role}
-                      onChange={e => updateEmployee(emp.id, 'role', e.target.value)}
+                      onChange={e => {
+                        const newRole = e.target.value
+                        if (emp.id === currentUserId && newRole !== 'admin') {
+                          if (!window.confirm('You are about to remove your own admin access. You will be locked out of the admin panel. Continue?')) return
+                        }
+                        if (newRole === 'admin' && emp.role !== 'admin') {
+                          if (!window.confirm(`Grant admin access to ${emp.full_name || emp.email}? They will have full control over all employees and data.`)) return
+                        }
+                        updateEmployee(emp.id, 'role', newRole)
+                      }}
                       className={`emp-role-select emp-select ${emp.role === 'admin' ? 'role-admin' : 'role-employee'}`}
-                      style={{ width: 90 }}
+                      style={{ width: 110 }}
                     >
                       <option value="employee">Employee</option>
                       <option value="admin">Admin</option>
                     </select>
 
                     <div style={{ width: 80, display: 'flex', justifyContent: 'flex-end' }}>
-                      {confirmDeleteId === emp.id ? (
-                        <div style={{ display: 'flex', gap: 4 }}>
-                          <button className="dept-remove-btn dept-delete-confirm-btn" onClick={() => handleDeleteEmployee(emp)} style={{ padding: '4px 8px', fontSize: 11 }}>Delete?</button>
-                          <button className="dept-remove-btn" onClick={() => setConfirmDeleteId(null)} style={{ padding: '4px 8px', fontSize: 11 }}>No</button>
-                        </div>
-                      ) : (
-                        <button
-                          className="dept-remove-btn dept-delete-icon-btn"
-                          onClick={() => { setConfirmDeleteId(emp.id); setDeleteErr('') }}
-                          title="Permanently delete this user"
-                        >
-                          <Trash2 size={13} />
-                        </button>
+                      {emp.id !== currentUserId && (
+                        confirmDeleteId === emp.id ? (
+                          <div style={{ display: 'flex', gap: 4 }}>
+                            <button className="dept-remove-btn dept-delete-confirm-btn" onClick={() => handleDeleteEmployee(emp)} style={{ padding: '4px 8px', fontSize: 11 }}>Delete?</button>
+                            <button className="dept-remove-btn" onClick={() => setConfirmDeleteId(null)} style={{ padding: '4px 8px', fontSize: 11 }}>No</button>
+                          </div>
+                        ) : (
+                          <button
+                            className="dept-remove-btn dept-delete-icon-btn"
+                            onClick={() => { setConfirmDeleteId(emp.id); setDeleteErr('') }}
+                            title="Permanently delete this user"
+                          >
+                            <Trash2 size={13} />
+                          </button>
+                        )
                       )}
                     </div>
                   </div>
