@@ -287,6 +287,7 @@ function BonusFineSection({ employee }) {
   const [note, setNote] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  const [localTotals, setLocalTotals] = useState({ bonuses: Number(employee.bonuses) || 0, fines: Number(employee.fines) || 0 })
 
   useEffect(() => {
     supabase.from('transactions')
@@ -307,17 +308,19 @@ function BonusFineSection({ employee }) {
 
     // Update profile aggregate
     const field = type === 'bonus' ? 'bonuses' : 'fines'
-    const current = Number(employee[field]) || 0
-    await supabase.from('profiles').update({ [field]: current + amt }).eq('id', employee.id)
-    employee[field] = current + amt  // update local ref so next add stacks correctly
+    setLocalTotals(prev => {
+      const next = { ...prev, [field]: prev[field] + amt }
+      supabase.from('profiles').update({ [field]: next[field] }).eq('id', employee.id)
+      return next
+    })
 
     setTransactions(prev => [tx, ...prev])
     setAmount(''); setNote('')
     setSaving(false)
   }
 
-  const totalBonus = transactions.filter(t => t.type === 'bonus').reduce((s, t) => s + Number(t.amount), 0)
-  const totalFine  = transactions.filter(t => t.type === 'fine').reduce((s, t) => s + Number(t.amount), 0)
+  const totalBonus = localTotals.bonuses
+  const totalFine  = localTotals.fines
 
   return (
     <div className="bf-wrap">

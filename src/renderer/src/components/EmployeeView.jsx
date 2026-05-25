@@ -135,6 +135,7 @@ export default function EmployeeView({ profile, onSignOut }) {
   }, [isIdle, activeSession?.id, fresh.id])
 
   async function clockIn() {
+    if (activeSession) return // guard against double-tap
     totalIdleRef.current = 0
     idleStartAtRef.current = null
     setIdleStartAt(null)
@@ -144,6 +145,7 @@ export default function EmployeeView({ profile, onSignOut }) {
     const { data, error } = await supabase
       .from('work_sessions').insert({ employee_id: fresh.id }).select().single()
     if (!error) { setActiveSession(data); setElapsed(0) }
+    else window.electronAPI?.setTracking?.(false) // revert if insert failed
     setClocking(false)
   }
 

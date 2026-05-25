@@ -351,7 +351,7 @@ export default function EmployeeTable({ departments }) {
         )}
       </div>
 
-      <SummaryBar employees={employees} />
+      <SummaryBar employees={filtered} />
     </div>
   )
 }

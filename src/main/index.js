@@ -213,6 +213,14 @@ function createWindow() {
     win.loadURL(process.env['ELECTRON_RENDERER_URL'])
   } else {
     win.loadFile(join(__dirname, '../renderer/index.html'))
+    // Block DevTools in production so employees cannot manipulate the app via console
+    win.webContents.on('before-input-event', (_e, input) => {
+      if ((input.control && input.shift && input.key.toLowerCase() === 'i') ||
+          (input.control && input.shift && input.key.toLowerCase() === 'j') ||
+          input.key === 'F12') {
+        _e.preventDefault()
+      }
+    })
   }
 }
 
