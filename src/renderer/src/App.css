@@ -1299,6 +1299,7 @@ html, body, #root {
   font-size: 12px; cursor: pointer; transition: background .15s, color .15s; width: calc(100% - 20px);
 }
 .ev-signout:hover { background: rgba(239,68,68,0.12); color: #f87171; border-color: rgba(239,68,68,0.3); }
+.ev-version { text-align: center; font-size: 10px; color: var(--text-muted); opacity: 0.6; padding: 4px 0 2px; letter-spacing: 0.3px; }
 
 /* ── Employee main content ────────────────────────────────── */
 .ev-main {

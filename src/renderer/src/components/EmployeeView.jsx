@@ -23,6 +23,7 @@ export default function EmployeeView({ profile, onSignOut }) {
   const [loading, setLoading] = useState(true)
   const [clocking, setClocking] = useState(false)
   const [activeNav, setActiveNav] = useState('dashboard')
+  const [appVersion, setAppVersion] = useState('')
 
   // Activity tracking
   const [isIdle, setIsIdle] = useState(false)
@@ -30,6 +31,10 @@ export default function EmployeeView({ profile, onSignOut }) {
   const totalIdleRef = useRef(0)  // accumulated idle seconds this session
   const idleStartAtRef = useRef(null) // mirror of idleStartAt for use in async callbacks
   const activityBcRef = useRef(null) // supabase broadcast channel
+
+  useEffect(() => {
+    window.electronAPI?.getVersion?.().then(v => { if (v) setAppVersion(v) })
+  }, [])
 
   useEffect(() => {
     if (!profile?.id) return
@@ -250,6 +255,8 @@ export default function EmployeeView({ profile, onSignOut }) {
             </button>
           ))}
         </nav>
+
+        {appVersion && <div className="ev-version">v{appVersion}</div>}
 
         {/* Sign out */}
         <button className="ev-signout" onClick={onSignOut}>
