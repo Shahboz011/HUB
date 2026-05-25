@@ -16,6 +16,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onUserIdle: (cb) => ipcRenderer.on('user-idle', (_e, secs) => cb(secs)),
   onUserActive: (cb) => ipcRenderer.on('user-active', () => cb()),
   getVersion: () => ipcRenderer.invoke('get-version'),
-  signScreenshotUrls: (paths) => ipcRenderer.invoke('sign-screenshot-urls', paths),
+  fetchScreenshotImages: (paths) => ipcRenderer.invoke('fetch-screenshot-images', paths),
   captureScreen: () => ipcRenderer.invoke('capture-screen'),
 })

@@ -221,13 +221,13 @@ function ScreenshotsSection({ employeeId }) {
         .limit(48)
       if (error) { setDebugInfo('db_error: ' + error.message); setLoading(false); return }
       if (!data?.length) { setDebugInfo('db_empty: 0 rows'); setLoading(false); return }
-      setDebugInfo(`db_ok: ${data.length} rows, signing urls...`)
-      const signedUrls = window.electronAPI?.signScreenshotUrls
-        ? await window.electronAPI.signScreenshotUrls(data.map(s => s.path))
+      setDebugInfo(`db_ok: ${data.length} rows, fetching images...`)
+      const dataUrls = window.electronAPI?.fetchScreenshotImages
+        ? await window.electronAPI.fetchScreenshotImages(data.map(s => s.path))
         : null
-      if (!signedUrls) { setDebugInfo('sign_failed: no electronAPI or returned null'); setLoading(false); return }
-      const withUrls = data.map((s, i) => ({ ...s, url: signedUrls[i] })).filter(s => s.url)
-      setDebugInfo(`sign_ok: ${signedUrls.length} urls, ${withUrls.length} valid`)
+      if (!dataUrls) { setDebugInfo('fetch_failed: no electronAPI or returned null'); setLoading(false); return }
+      const withUrls = data.map((s, i) => ({ ...s, url: dataUrls[i] })).filter(s => s.url)
+      setDebugInfo(`fetch_ok: ${dataUrls.length} fetched, ${withUrls.length} loaded`)
       setScreenshots(withUrls)
       setLoading(false)
     }
