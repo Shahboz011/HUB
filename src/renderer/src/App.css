@@ -1565,3 +1565,76 @@ html, body, #root {
 .counter-activity-pct {
   font-size: 11px; font-weight: 600; margin-top: 4px; display: block;
 }
+
+/* ── Screenshots gallery ───────────────────────────────────────────────────── */
+.ss-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+.ss-thumb-wrap {
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  transition: transform 0.15s, box-shadow 0.15s, border-color 0.15s;
+}
+.ss-thumb-wrap:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 18px rgba(0,0,0,0.12);
+  border-color: var(--accent);
+}
+.ss-thumb {
+  width: 100%;
+  display: block;
+  aspect-ratio: 16/9;
+  object-fit: cover;
+}
+.ss-thumb-time {
+  display: block;
+  padding: 5px 8px;
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+.ss-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.88);
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+.ss-overlay-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  cursor: default;
+  padding: 24px;
+}
+.ss-full-img {
+  max-width: 88vw;
+  max-height: 76vh;
+  border-radius: var(--radius-md);
+  box-shadow: 0 24px 64px rgba(0,0,0,0.5);
+}
+.ss-full-meta {
+  color: rgba(255,255,255,0.65);
+  font-size: 13px;
+}
+.ss-close-btn {
+  background: rgba(255,255,255,0.12);
+  border: 1px solid rgba(255,255,255,0.2);
+  color: #fff;
+  padding: 7px 18px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: 13px;
+  transition: background 0.15s;
+}
+.ss-close-btn:hover { background: rgba(255,255,255,0.22); }

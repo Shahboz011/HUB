@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { ArrowLeft, ClipboardList, Clock, CalendarDays, DollarSign, PiggyBank } from 'lucide-react'
+import { ArrowLeft, ClipboardList, Clock, CalendarDays, DollarSign, PiggyBank, Camera } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 
 const DEPT_COLORS = [
@@ -196,6 +196,85 @@ export default function AttendanceView({ employee, onBack }) {
 
       {/* Bonuses & Fines */}
       <BonusFineSection employee={employee} />
+
+      {/* Screenshots */}
+      <ScreenshotsSection employeeId={employee.id} />
+    </div>
+  )
+}
+
+// ── Screenshots ──────────────────────────────────────────────────────────────
+function ScreenshotsSection({ employeeId }) {
+  const [screenshots, setScreenshots] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [expanded, setExpanded] = useState(null)
+
+  useEffect(() => {
+    async function load() {
+      const { data, error } = await supabase
+        .from('screenshots')
+        .select('*')
+        .eq('employee_id', employeeId)
+        .order('taken_at', { ascending: false })
+        .limit(48)
+      if (error || !data?.length) { setLoading(false); return }
+      const { data: urls } = await supabase.storage
+        .from('screenshots')
+        .createSignedUrls(data.map(s => s.path), 3600)
+      if (urls) {
+        setScreenshots(data.map((s, i) => ({ ...s, url: urls[i]?.signedUrl })).filter(s => s.url))
+      }
+      setLoading(false)
+    }
+    load()
+  }, [employeeId])
+
+  if (loading) return null
+
+  return (
+    <div className="bf-wrap">
+      <div className="bf-header">
+        <h3 className="bf-title" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <Camera size={15} />
+          Screenshots
+          <span style={{ fontWeight: 400, color: 'var(--text-muted)', fontSize: 13, marginLeft: 4 }}>
+            {screenshots.length ? `${screenshots.length} captured` : ''}
+          </span>
+        </h3>
+      </div>
+
+      {screenshots.length === 0 ? (
+        <p className="bf-empty">No screenshots yet — captured every 5 minutes while clocked in.</p>
+      ) : (
+        <div className="ss-grid">
+          {screenshots.map(s => (
+            <div key={s.id} className="ss-thumb-wrap" onClick={() => setExpanded(s)}>
+              <img src={s.url} alt="" className="ss-thumb" />
+              <span className="ss-thumb-time">
+                {new Date(s.taken_at).toLocaleString('en-US', {
+                  month: 'short', day: 'numeric',
+                  hour: '2-digit', minute: '2-digit',
+                })}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {expanded && (
+        <div className="ss-overlay" onClick={() => setExpanded(null)}>
+          <div className="ss-overlay-inner" onClick={e => e.stopPropagation()}>
+            <img src={expanded.url} alt="" className="ss-full-img" />
+            <div className="ss-full-meta">
+              {new Date(expanded.taken_at).toLocaleString('en-US', {
+                weekday: 'long', month: 'long', day: 'numeric',
+                hour: '2-digit', minute: '2-digit',
+              })}
+            </div>
+            <button className="ss-close-btn" onClick={() => setExpanded(null)}>✕ Close</button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

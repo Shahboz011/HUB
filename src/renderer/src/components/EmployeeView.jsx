@@ -92,6 +92,27 @@ export default function EmployeeView({ profile, onSignOut }) {
     })
   }, [])
 
+  // Screenshot capture — every 5 minutes while clocked in
+  useEffect(() => {
+    if (!activeSession || !window.electronAPI?.captureScreen) return
+    async function capture() {
+      try {
+        const dataUrl = await window.electronAPI.captureScreen()
+        if (!dataUrl) return
+        const base64 = dataUrl.split(',')[1]
+        const bytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0))
+        const filename = `${profile.id}/${Date.now()}.jpg`
+        const { error } = await supabase.storage.from('screenshots').upload(filename, bytes, { contentType: 'image/jpeg' })
+        if (!error) {
+          await supabase.from('screenshots').insert({ employee_id: profile.id, path: filename, taken_at: new Date().toISOString() })
+        }
+      } catch { /* silently fail if bucket/table not configured yet */ }
+    }
+    capture()
+    const id = setInterval(capture, 5 * 60 * 1000)
+    return () => clearInterval(id)
+  }, [activeSession?.id])
+
   // Supabase broadcast channel for admin visibility (set up when clocked in)
   useEffect(() => {
     if (!activeSession || !fresh.id) return
