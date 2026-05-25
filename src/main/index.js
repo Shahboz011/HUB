@@ -100,7 +100,7 @@ let isTracking = false
 ipcMain.handle('set-tracking', (_event, val) => { isTracking = !!val })
 
 // ── Activity monitor ────────────────────────────────────────────────────────
-const IDLE_THRESHOLD_SECS = 10 * 60 // 10 minutes
+const IDLE_THRESHOLD_SECS = 2 * 60 // 2 minutes
 
 function setupActivityMonitor() {
   let wasIdle = false
@@ -117,7 +117,7 @@ function setupActivityMonitor() {
       if (Notification.isSupported()) {
         const n = new Notification({
           title: 'Salary Command Center — Timer Paused',
-          body: 'No activity for 10 minutes. Your work timer has been paused.',
+          body: 'No activity for 2 minutes. Your work timer has been paused.',
         })
         n.on('click', () => { if (win) { win.show(); win.focus() } })
         n.show()
