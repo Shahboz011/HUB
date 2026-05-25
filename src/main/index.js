@@ -127,17 +127,30 @@ function setupAutoUpdater() {
   autoUpdater.autoDownload = true
   autoUpdater.autoInstallOnAppQuit = true
 
-  // Send to renderer so it can show a polished in-app banner
+  autoUpdater.on('update-available', (info) => {
+    if (win) win.webContents.send('update-available', info.version)
+  })
+
+  autoUpdater.on('download-progress', (p) => {
+    if (win) win.webContents.send('update-progress', Math.round(p.percent))
+  })
+
   autoUpdater.on('update-downloaded', () => {
     if (win) win.webContents.send('update-ready')
   })
 
   autoUpdater.on('error', (err) => {
     console.error('Auto-updater error:', err.message)
+    if (win) win.webContents.send('update-error', err.message)
   })
 
-  // Check 4 seconds after launch so the window is fully loaded first
-  setTimeout(() => autoUpdater.checkForUpdates(), 4000)
+  function check() {
+    autoUpdater.checkForUpdates().catch(err => console.error('Update check failed:', err.message))
+  }
+
+  // Check shortly after launch, then every 30 minutes
+  setTimeout(check, 4000)
+  setInterval(check, 30 * 60 * 1000)
 }
 
 // ── Window ─────────────────────────────────────────────────

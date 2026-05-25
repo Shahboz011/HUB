@@ -8,7 +8,27 @@ import EmployeeView from './components/EmployeeView'
 import SalaryReport from './components/SalaryReport'
 import CompleteProfile from './components/CompleteProfile'
 
-function UpdateBanner({ onRestart, onDismiss }) {
+function UpdateBanner({ state, progress, version, onRestart, onDismiss }) {
+  if (state === 'downloading') {
+    return (
+      <div className="update-banner">
+        <div className="update-banner-icon">
+          <Download size={18} />
+        </div>
+        <div className="update-banner-body">
+          <span className="update-banner-title">Downloading update{version ? ` v${version}` : ''}…</span>
+          <div className="update-progress-track">
+            <div className="update-progress-fill" style={{ width: `${progress}%` }} />
+          </div>
+          <span className="update-banner-desc">{progress}% — will notify you when ready</span>
+        </div>
+        <button className="update-banner-close" onClick={onDismiss} title="Dismiss">
+          <X size={14} />
+        </button>
+      </div>
+    )
+  }
+
   return (
     <div className="update-banner">
       <div className="update-banner-icon">
@@ -38,7 +58,9 @@ export default function App() {
   const [departments, setDepartments] = useState([])
   const [loading, setLoading] = useState(true)
   const [activeTab, setActiveTab] = useState('employees')
-  const [updateReady, setUpdateReady] = useState(false)
+  const [updateState, setUpdateState] = useState(null) // null | 'downloading' | 'ready'
+  const [updateProgress, setUpdateProgress] = useState(0)
+  const [updateVersion, setUpdateVersion] = useState('')
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -65,8 +87,18 @@ export default function App() {
       })
     }
 
+    if (window.electronAPI?.onUpdateAvailable) {
+      window.electronAPI.onUpdateAvailable((version) => {
+        setUpdateVersion(version || '')
+        setUpdateProgress(0)
+        setUpdateState('downloading')
+      })
+    }
+    if (window.electronAPI?.onUpdateProgress) {
+      window.electronAPI.onUpdateProgress((percent) => setUpdateProgress(percent))
+    }
     if (window.electronAPI?.onUpdateReady) {
-      window.electronAPI.onUpdateReady(() => setUpdateReady(true))
+      window.electronAPI.onUpdateReady(() => setUpdateState('ready'))
     }
 
     return () => subscription.unsubscribe()
@@ -108,7 +140,7 @@ export default function App() {
     return (
       <div className="app" style={{ overflow: 'hidden' }}>
         <EmployeeView profile={profile} onSignOut={handleSignOut} />
-        {updateReady && <UpdateBanner onRestart={() => window.electronAPI?.installUpdate()} onDismiss={() => setUpdateReady(false)} />}
+        {updateState && <UpdateBanner state={updateState} progress={updateProgress} version={updateVersion} onRestart={() => window.electronAPI?.installUpdate()} onDismiss={() => setUpdateState(null)} />}
       </div>
     )
   }
@@ -175,7 +207,7 @@ export default function App() {
         }
       </main>
 
-      {updateReady && <UpdateBanner onRestart={() => window.electronAPI?.installUpdate()} onDismiss={() => setUpdateReady(false)} />}
+      {updateState && <UpdateBanner state={updateState} progress={updateProgress} version={updateVersion} onRestart={() => window.electronAPI?.installUpdate()} onDismiss={() => setUpdateState(null)} />}
     </div>
   )
 }
