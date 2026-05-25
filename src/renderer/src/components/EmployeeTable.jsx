@@ -243,9 +243,20 @@ export default function EmployeeTable({ departments }) {
         })
       .subscribe()
 
+    // Polling fallback: re-sync active sessions every 15s in case realtime events are missed
+    const pollId = setInterval(async () => {
+      const { data } = await supabase.from('work_sessions').select('*').is('ended_at', null)
+      if (data) {
+        const map = {}
+        data.forEach(s => { map[s.employee_id] = s })
+        setActiveSessions(map)
+      }
+    }, 15000)
+
     return () => {
       supabase.removeChannel(profileSub)
       supabase.removeChannel(sessionSub)
+      clearInterval(pollId)
     }
   }, [])
 

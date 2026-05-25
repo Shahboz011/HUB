@@ -1,6 +1,6 @@
 {
   "name": "salary-command-center",
-  "version": "1.2.0",
+  "version": "1.4.0",
   "description": "Salary Command Center — professional payroll dashboard",
   "author": "Shahboz Nurullaev",
   "main": "out/main/index.js",
@@ -50,7 +50,8 @@
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-virtualized-auto-sizer": "^1.0.24",
-    "react-window": "^1.8.10"
+    "react-window": "^1.8.10",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.4",

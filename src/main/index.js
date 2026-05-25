@@ -1,4 +1,4 @@
-const { app, BrowserWindow, shell, dialog, ipcMain, clipboard } = require('electron')
+const { app, BrowserWindow, shell, ipcMain, clipboard } = require('electron')
 const { join } = require('path')
 const { autoUpdater } = require('electron-updater')
 const https = require('https')
@@ -61,9 +61,38 @@ ipcMain.handle('invite-member', async (_event, { email, department, position, ho
   return { ok: false, error: msg }
 })
 
+// IPC: delete a member from auth + profile
+ipcMain.handle('delete-member', async (_event, { userId }) => {
+  const result = await new Promise((resolve, reject) => {
+    const options = {
+      hostname: SUPABASE_URL,
+      path: `/auth/v1/admin/users/${userId}`,
+      method: 'DELETE',
+      headers: {
+        'Authorization': `Bearer ${SERVICE_KEY}`,
+        'apikey': SERVICE_KEY,
+      },
+    }
+    const req = https.request(options, (res) => {
+      let data = ''
+      res.on('data', chunk => { data += chunk })
+      res.on('end', () => resolve({ status: res.statusCode, body: data }))
+    })
+    req.on('error', reject)
+    req.end()
+  })
+  if (result.status === 200 || result.status === 204) return { ok: true }
+  return { ok: false, error: `Status ${result.status}` }
+})
+
 // IPC: copy text to clipboard
 ipcMain.handle('copy-to-clipboard', (_event, text) => {
   clipboard.writeText(text)
+})
+
+// IPC: install downloaded update and restart
+ipcMain.handle('install-update', () => {
+  autoUpdater.quitAndInstall()
 })
 
 const PROTOCOL = 'salary-app'
@@ -98,18 +127,9 @@ function setupAutoUpdater() {
   autoUpdater.autoDownload = true
   autoUpdater.autoInstallOnAppQuit = true
 
-  // Silently download; only prompt when ready to install
+  // Send to renderer so it can show a polished in-app banner
   autoUpdater.on('update-downloaded', () => {
-    dialog.showMessageBox(win, {
-      type: 'info',
-      buttons: ['Restart Now', 'Later'],
-      defaultId: 0,
-      title: 'Update Ready',
-      message: 'A new version of Salary Command Center has been downloaded.',
-      detail: 'Restart the app now to apply the update.',
-    }).then(({ response }) => {
-      if (response === 0) autoUpdater.quitAndInstall()
-    })
+    if (win) win.webContents.send('update-ready')
   })
 
   autoUpdater.on('error', (err) => {

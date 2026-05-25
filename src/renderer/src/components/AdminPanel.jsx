@@ -5,6 +5,7 @@ import { supabase } from '../lib/supabase'
 // Safe IPC wrapper — works in Electron; falls back gracefully in browser preview
 const electronAPI = window.electronAPI ?? {
   inviteMember: async () => ({ ok: false, error: 'Not running in Electron. Please use the desktop app.' }),
+  deleteMember: async () => ({ ok: false, error: 'Not running in Electron. Please use the desktop app.' }),
   copyToClipboard: async (text) => { try { await navigator.clipboard.writeText(text) } catch {} },
 }
 
@@ -24,7 +25,7 @@ function initials(name) {
 }
 
 // ── Department detail: members + invite ──────────────────────────────────────
-function DeptMembers({ dept, employees, departments, onBack, onEmployeeUpdate }) {
+function DeptMembers({ dept, employees, departments, onBack, onEmployeeUpdate, onEmployeeDelete }) {
   const [showInvite, setShowInvite] = useState(false)
   const [invEmail, setInvEmail] = useState('')
   const [invPosition, setInvPosition] = useState('')
@@ -33,6 +34,8 @@ function DeptMembers({ dept, employees, departments, onBack, onEmployeeUpdate })
   const [createdCredentials, setCreatedCredentials] = useState(null) // { email, tempPassword }
   const [invErr, setInvErr] = useState('')
   const [copied, setCopied] = useState(false)
+  const [confirmDeleteId, setConfirmDeleteId] = useState(null)
+  const [deleteErr, setDeleteErr] = useState('')
 
   const members = employees.filter(e => e.department === dept)
   const color = deptColor(dept)
@@ -72,6 +75,14 @@ function DeptMembers({ dept, employees, departments, onBack, onEmployeeUpdate })
   async function removeMember(emp) {
     await supabase.from('profiles').update({ department: null }).eq('id', emp.id)
     onEmployeeUpdate(emp.id, 'department', null)
+  }
+
+  async function deleteEmployee(emp) {
+    setDeleteErr('')
+    const result = await electronAPI.deleteMember({ userId: emp.id })
+    if (!result.ok) { setDeleteErr(`Failed to delete ${emp.email || emp.id}: ${result.error}`); setConfirmDeleteId(null); return }
+    onEmployeeDelete(emp.id)
+    setConfirmDeleteId(null)
   }
 
   return (
@@ -194,18 +205,27 @@ function DeptMembers({ dept, employees, departments, onBack, onEmployeeUpdate })
                     <span className={`role-badge ${emp.role === 'admin' ? 'role-admin' : 'role-employee'}`} style={{ fontSize: 10 }}>{emp.role}</span>
                   </div>
                 </div>
-                <button
-                  className="dept-remove-btn"
-                  onClick={() => removeMember(emp)}
-                  title="Remove from department"
-                >
-                  Remove
-                </button>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-end' }}>
+                  {confirmDeleteId === emp.id ? (
+                    <div style={{ display: 'flex', gap: 6 }}>
+                      <button className="dept-remove-btn dept-delete-confirm-btn" onClick={() => deleteEmployee(emp)}>Delete?</button>
+                      <button className="dept-remove-btn" onClick={() => setConfirmDeleteId(null)}>Cancel</button>
+                    </div>
+                  ) : (
+                    <div style={{ display: 'flex', gap: 6 }}>
+                      <button className="dept-remove-btn" onClick={() => removeMember(emp)} title="Remove from department">Remove</button>
+                      <button className="dept-remove-btn dept-delete-icon-btn" onClick={() => { setConfirmDeleteId(emp.id); setDeleteErr('') }} title="Delete user permanently">
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
+                  )}
+                </div>
               </div>
             )
           })}
         </div>
       )}
+      {deleteErr && <p className="bf-error" style={{ marginTop: 12 }}>{deleteErr}</p>}
     </div>
   )
 }
@@ -219,6 +239,9 @@ export default function AdminPanel({ departments, onDepartmentsChange }) {
   const [newDept, setNewDept] = useState('')
   const [deptError, setDeptError] = useState('')
   const [empSearch, setEmpSearch] = useState('')
+
+  const [confirmDeleteId, setConfirmDeleteId] = useState(null)
+  const [deleteErr, setDeleteErr] = useState('')
 
   // Invite form state (Members tab)
   const [invEmail, setInvEmail] = useState('')
@@ -240,6 +263,18 @@ export default function AdminPanel({ departments, onDepartmentsChange }) {
 
   function updateLocalEmployee(id, field, value) {
     setEmployees(prev => prev.map(e => e.id === id ? { ...e, [field]: value } : e))
+  }
+
+  function removeLocalEmployee(id) {
+    setEmployees(prev => prev.filter(e => e.id !== id))
+  }
+
+  async function handleDeleteEmployee(emp) {
+    setDeleteErr('')
+    const result = await electronAPI.deleteMember({ userId: emp.id })
+    if (!result.ok) { setDeleteErr(`Failed to delete ${emp.email || emp.id}: ${result.error}`); setConfirmDeleteId(null); return }
+    removeLocalEmployee(emp.id)
+    setConfirmDeleteId(null)
   }
 
   async function addDepartment() {
@@ -319,6 +354,7 @@ export default function AdminPanel({ departments, onDepartmentsChange }) {
         departments={departments}
         onBack={() => setSelectedDept(null)}
         onEmployeeUpdate={updateLocalEmployee}
+        onEmployeeDelete={removeLocalEmployee}
       />
     )
   }
@@ -505,6 +541,7 @@ export default function AdminPanel({ departments, onDepartmentsChange }) {
                   <span style={{ width: 160 }}>Position</span>
                   <span style={{ width: 110 }}>Hourly Rate</span>
                   <span style={{ width: 90 }}>Role</span>
+                  <span style={{ width: 80 }} />
                 </div>
                 {filteredEmps.map(emp => (
                   <div key={emp.id} className="emp-manage-row">
@@ -557,10 +594,28 @@ export default function AdminPanel({ departments, onDepartmentsChange }) {
                       <option value="employee">Employee</option>
                       <option value="admin">Admin</option>
                     </select>
+
+                    <div style={{ width: 80, display: 'flex', justifyContent: 'flex-end' }}>
+                      {confirmDeleteId === emp.id ? (
+                        <div style={{ display: 'flex', gap: 4 }}>
+                          <button className="dept-remove-btn dept-delete-confirm-btn" onClick={() => handleDeleteEmployee(emp)} style={{ padding: '4px 8px', fontSize: 11 }}>Delete?</button>
+                          <button className="dept-remove-btn" onClick={() => setConfirmDeleteId(null)} style={{ padding: '4px 8px', fontSize: 11 }}>No</button>
+                        </div>
+                      ) : (
+                        <button
+                          className="dept-remove-btn dept-delete-icon-btn"
+                          onClick={() => { setConfirmDeleteId(emp.id); setDeleteErr('') }}
+                          title="Permanently delete this user"
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      )}
+                    </div>
                   </div>
                 ))}
               </div>
             )}
+            {deleteErr && <p className="bf-error" style={{ marginTop: 12 }}>{deleteErr}</p>}
           </div>
         </div>
       )}

@@ -1,10 +1,11 @@
 import { useState } from 'react'
-import { Monitor } from 'lucide-react'
+import { Monitor, Eye, EyeOff } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 
 export default function AuthScreen() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [showPass, setShowPass] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
@@ -46,14 +47,19 @@ export default function AuthScreen() {
 
           <div className="form-group">
             <label className="form-label">Password</label>
-            <input
-              type="password"
-              value={password}
-              onChange={e => setPassword(e.target.value)}
-              className="form-input"
-              placeholder="••••••••"
-              required
-            />
+            <div className="form-input-wrap">
+              <input
+                type={showPass ? 'text' : 'password'}
+                value={password}
+                onChange={e => setPassword(e.target.value)}
+                className="form-input"
+                placeholder="••••••••"
+                required
+              />
+              <button type="button" className="eye-btn" onClick={() => setShowPass(p => !p)} tabIndex={-1}>
+                {showPass ? <EyeOff size={15} /> : <Eye size={15} />}
+              </button>
+            </div>
           </div>
 
           <button type="submit" className="auth-submit" disabled={loading}>

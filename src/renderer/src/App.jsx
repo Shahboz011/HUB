@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { supabase } from './lib/supabase'
-import { Monitor, Users, Settings2, BarChart3, LogOut } from 'lucide-react'
+import { Monitor, Users, Settings2, BarChart3, LogOut, Download, X, RotateCcw } from 'lucide-react'
 import AuthScreen from './components/AuthScreen'
 import EmployeeTable from './components/EmployeeTable'
 import AdminPanel from './components/AdminPanel'
@@ -8,12 +8,37 @@ import EmployeeView from './components/EmployeeView'
 import SalaryReport from './components/SalaryReport'
 import CompleteProfile from './components/CompleteProfile'
 
+function UpdateBanner({ onRestart, onDismiss }) {
+  return (
+    <div className="update-banner">
+      <div className="update-banner-icon">
+        <Download size={18} />
+      </div>
+      <div className="update-banner-body">
+        <span className="update-banner-title">Update ready to install</span>
+        <span className="update-banner-desc">A new version has been downloaded. Restart to apply.</span>
+      </div>
+      <div className="update-banner-actions">
+        <button className="update-banner-later" onClick={onDismiss}>Later</button>
+        <button className="update-banner-restart" onClick={onRestart}>
+          <RotateCcw size={13} />
+          Restart Now
+        </button>
+      </div>
+      <button className="update-banner-close" onClick={onDismiss} title="Dismiss">
+        <X size={14} />
+      </button>
+    </div>
+  )
+}
+
 export default function App() {
   const [session, setSession] = useState(null)
   const [profile, setProfile] = useState(null)
   const [departments, setDepartments] = useState([])
   const [loading, setLoading] = useState(true)
   const [activeTab, setActiveTab] = useState('employees')
+  const [updateReady, setUpdateReady] = useState(false)
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -38,6 +63,10 @@ export default function App() {
           supabase.auth.setSession({ access_token: accessToken, refresh_token: refreshToken })
         }
       })
+    }
+
+    if (window.electronAPI?.onUpdateReady) {
+      window.electronAPI.onUpdateReady(() => setUpdateReady(true))
     }
 
     return () => subscription.unsubscribe()
@@ -79,6 +108,7 @@ export default function App() {
     return (
       <div className="app" style={{ overflow: 'hidden' }}>
         <EmployeeView profile={profile} onSignOut={handleSignOut} />
+        {updateReady && <UpdateBanner onRestart={() => window.electronAPI?.installUpdate()} onDismiss={() => setUpdateReady(false)} />}
       </div>
     )
   }
@@ -144,6 +174,8 @@ export default function App() {
           : <AdminPanel departments={departments} onDepartmentsChange={setDepartments} />
         }
       </main>
+
+      {updateReady && <UpdateBanner onRestart={() => window.electronAPI?.installUpdate()} onDismiss={() => setUpdateReady(false)} />}
     </div>
   )
 }
