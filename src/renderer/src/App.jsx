@@ -61,6 +61,7 @@ export default function App() {
   const [updateState, setUpdateState] = useState(null) // null | 'downloading' | 'ready'
   const [updateProgress, setUpdateProgress] = useState(0)
   const [updateVersion, setUpdateVersion] = useState('')
+  const [appVersion, setAppVersion] = useState('')
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -86,6 +87,8 @@ export default function App() {
         }
       })
     }
+
+    window.electronAPI?.getVersion?.().then(v => { if (v) setAppVersion(v) })
 
     if (window.electronAPI?.onUpdateAvailable) {
       window.electronAPI.onUpdateAvailable((version) => {
@@ -154,7 +157,10 @@ export default function App() {
           </div>
           <div>
             <h1 className="app-title">Salary Command Center</h1>
-            <p className="app-subtitle">Payroll management &amp; calculation engine</p>
+            <p className="app-subtitle">
+              Payroll management &amp; calculation engine
+              {appVersion && <span className="app-version-badge">v{appVersion}</span>}
+            </p>
           </div>
         </div>
 

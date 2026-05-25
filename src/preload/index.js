@@ -15,6 +15,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onIdleTick: (cb) => ipcRenderer.on('idle-tick', (_e, secs) => cb(secs)),
   onUserIdle: (cb) => ipcRenderer.on('user-idle', (_e, secs) => cb(secs)),
   onUserActive: (cb) => ipcRenderer.on('user-active', () => cb()),
+  getVersion: () => ipcRenderer.invoke('get-version'),
   captureScreen: async () => {
     try {
       const sources = await desktopCapturer.getSources({

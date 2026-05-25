@@ -85,6 +85,9 @@ ipcMain.handle('delete-member', async (_event, { userId }) => {
   return { ok: false, error: `Status ${result.status}` }
 })
 
+// IPC: get app version
+ipcMain.handle('get-version', () => app.getVersion())
+
 // IPC: copy text to clipboard
 ipcMain.handle('copy-to-clipboard', (_event, text) => {
   clipboard.writeText(text)

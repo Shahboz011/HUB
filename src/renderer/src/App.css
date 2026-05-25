@@ -67,7 +67,8 @@ html, body, #root {
 .logo-mark svg { color: white; }
 
 .app-title { font-size: 15px; font-weight: 700; letter-spacing: -0.3px; color: var(--text-primary); }
-.app-subtitle { font-size: 11px; color: var(--text-muted); margin-top: 1px; }
+.app-subtitle { font-size: 11px; color: var(--text-muted); margin-top: 1px; display: flex; align-items: center; gap: 6px; }
+.app-version-badge { font-size: 10px; font-weight: 600; color: var(--text-muted); background: var(--bg-tertiary); border: 1px solid var(--border); border-radius: 4px; padding: 0px 5px; letter-spacing: 0.2px; }
 
 /* ── Nav tabs ─────────────────────────────────────────────── */
 .header-nav {
