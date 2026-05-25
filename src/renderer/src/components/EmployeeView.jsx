@@ -42,6 +42,7 @@ export default function EmployeeView({ profile, onSignOut }) {
       if (s) {
         setActiveSession(s)
         setElapsed(Math.floor((Date.now() - new Date(s.started_at).getTime()) / 1000))
+        window.electronAPI?.setTracking?.(true) // restore tracking for existing session
       }
       setLoading(false)
     })
