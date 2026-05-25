@@ -206,9 +206,9 @@ export default function EmployeeView({ profile, onSignOut }) {
   const activityPct = elapsed > 30 ? Math.round((activeSecs / elapsed) * 100) : 100
   const sessionEarned = (activeSecs / 3600) * rate  // only active time pays
 
-  const h = Math.floor(elapsed / 3600)
-  const m = Math.floor((elapsed % 3600) / 60)
-  const s = elapsed % 60
+  const h = Math.floor(activeSecs / 3600)
+  const m = Math.floor((activeSecs % 3600) / 60)
+  const s = Math.floor(activeSecs % 60)
 
   const initials = fresh.full_name
     ? fresh.full_name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase() : '?'
