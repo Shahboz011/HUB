@@ -1512,3 +1512,56 @@ html, body, #root {
   height: 100%; border-radius: 2px; background: #6366f1;
   transition: width .4s ease;
 }
+
+/* ── Idle overlay ──────────────────────────────────────────────────────────── */
+.idle-overlay {
+  position: fixed; inset: 0; z-index: 10000;
+  background: rgba(0,0,0,.72); backdrop-filter: blur(8px);
+  display: flex; align-items: center; justify-content: center;
+}
+.idle-modal {
+  background: var(--bg-surface); border: 1px solid var(--border);
+  border-radius: 18px; padding: 44px 52px; text-align: center;
+  max-width: 440px; width: 90%;
+  box-shadow: 0 32px 64px rgba(0,0,0,.45);
+}
+.idle-modal-icon { font-size: 44px; margin-bottom: 14px; line-height: 1; }
+.idle-modal-title { font-size: 22px; font-weight: 700; color: var(--text-primary); margin-bottom: 8px; }
+.idle-modal-desc { font-size: 13px; color: var(--text-secondary); line-height: 1.55; margin-bottom: 20px; }
+.idle-modal-timer {
+  font-family: var(--font-mono); font-size: 40px; font-weight: 700;
+  color: #f59e0b; letter-spacing: -1px; margin-bottom: 8px;
+}
+.idle-modal-sub { font-size: 12px; color: var(--text-muted); margin-bottom: 28px; }
+.idle-continue-btn {
+  padding: 12px 32px; background: var(--accent); color: #fff; border: none;
+  border-radius: var(--radius-sm); font-family: var(--font); font-size: 14px;
+  font-weight: 600; cursor: pointer; transition: opacity .15s;
+}
+.idle-continue-btn:hover { opacity: .88; }
+
+/* idle dot variants */
+.counter-dot-idle {
+  width: 8px; height: 8px; border-radius: 50%; background: #f59e0b;
+  display: inline-block; margin-right: 6px;
+}
+.live-badge-dot-idle {
+  width: 8px; height: 8px; border-radius: 50%; background: #f59e0b;
+  flex-shrink: 0;
+}
+.ev-status-idle {
+  background: #f59e0b18; border: 1px solid #f59e0b30; color: #f59e0b;
+}
+
+/* ── Activity bar (employee dashboard) ─────────────────────────────────────── */
+.activity-bar-wrap {
+  background: var(--bg-elevated); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); padding: 12px 14px; margin-bottom: 12px;
+}
+.activity-track {
+  height: 6px; border-radius: 3px; background: var(--border); overflow: hidden;
+}
+.activity-fill { height: 100%; border-radius: 3px; transition: width .5s ease, background .5s; }
+.counter-activity-pct {
+  font-size: 11px; font-weight: 600; margin-top: 4px; display: block;
+}

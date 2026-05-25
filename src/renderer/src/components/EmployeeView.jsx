@@ -1,7 +1,7 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import {
   Monitor, LayoutDashboard, UserCircle2, HelpCircle, LogOut,
-  Play, StopCircle, Info, ChevronDown, MessageCircle,
+  Play, StopCircle, Info, ChevronDown, MessageCircle, Activity,
 } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 
@@ -23,6 +23,13 @@ export default function EmployeeView({ profile, onSignOut }) {
   const [loading, setLoading] = useState(true)
   const [clocking, setClocking] = useState(false)
   const [activeNav, setActiveNav] = useState('dashboard')
+
+  // Activity tracking
+  const [isIdle, setIsIdle] = useState(false)
+  const [idleStartAt, setIdleStartAt] = useState(null) // ms timestamp when idle began
+  const totalIdleRef = useRef(0)  // accumulated idle seconds this session
+  const idleStartAtRef = useRef(null) // mirror of idleStartAt for use in async callbacks
+  const activityBcRef = useRef(null) // supabase broadcast channel
 
   useEffect(() => {
     if (!profile?.id) return
@@ -65,7 +72,52 @@ export default function EmployeeView({ profile, onSignOut }) {
     return () => clearInterval(id)
   }, [activeSession])
 
+  // Idle event listeners from main process
+  useEffect(() => {
+    if (!window.electronAPI) return
+    window.electronAPI.onUserIdle?.((secs) => {
+      const startAt = Date.now() - secs * 1000
+      idleStartAtRef.current = startAt
+      setIdleStartAt(startAt)
+      setIsIdle(true)
+    })
+    window.electronAPI.onUserActive?.(() => {
+      if (idleStartAtRef.current !== null) {
+        totalIdleRef.current += (Date.now() - idleStartAtRef.current) / 1000
+        idleStartAtRef.current = null
+      }
+      setIdleStartAt(null)
+      setIsIdle(false)
+    })
+  }, [])
+
+  // Supabase broadcast channel for admin visibility (set up when clocked in)
+  useEffect(() => {
+    if (!activeSession || !fresh.id) return
+    const ch = supabase.channel('employee-activity')
+      .subscribe((status) => {
+        if (status === 'SUBSCRIBED') {
+          ch.send({ type: 'broadcast', event: 'status',
+            payload: { employee_id: fresh.id, is_idle: false, ts: Date.now() } })
+        }
+      })
+    activityBcRef.current = ch
+    return () => { supabase.removeChannel(ch); activityBcRef.current = null }
+  }, [activeSession?.id, fresh.id])
+
+  // Re-broadcast whenever idle state changes so admin sees it immediately
+  useEffect(() => {
+    if (!activityBcRef.current || !fresh.id || !activeSession) return
+    activityBcRef.current.send({ type: 'broadcast', event: 'status',
+      payload: { employee_id: fresh.id, is_idle: isIdle, ts: Date.now() } }).catch(() => {})
+  }, [isIdle, activeSession?.id, fresh.id])
+
   async function clockIn() {
+    totalIdleRef.current = 0
+    idleStartAtRef.current = null
+    setIdleStartAt(null)
+    setIsIdle(false)
+    window.electronAPI?.setTracking?.(true)
     setClocking(true)
     const { data, error } = await supabase
       .from('work_sessions').insert({ employee_id: fresh.id }).select().single()
@@ -75,8 +127,16 @@ export default function EmployeeView({ profile, onSignOut }) {
 
   async function clockOut() {
     setClocking(true)
+    window.electronAPI?.setTracking?.(false)
     const now = new Date()
-    const durationHours = (now - new Date(activeSession.started_at)) / (1000 * 3600)
+    // Finalize any in-progress idle period
+    if (idleStartAtRef.current !== null) {
+      totalIdleRef.current += (Date.now() - idleStartAtRef.current) / 1000
+      idleStartAtRef.current = null
+    }
+    const totalElapsedSecs = (now - new Date(activeSession.started_at)) / 1000
+    const activeSecs = Math.max(0, totalElapsedSecs - totalIdleRef.current)
+    const durationHours = activeSecs / 3600
     await supabase.from('work_sessions').update({
       ended_at: now.toISOString(), duration_hours: durationHours,
     }).eq('id', activeSession.id)
@@ -85,7 +145,20 @@ export default function EmployeeView({ profile, onSignOut }) {
     setFresh(p => ({ ...p, hours_worked: newTotal }))
     setActiveSession(null)
     setElapsed(0)
+    totalIdleRef.current = 0
+    setIdleStartAt(null)
+    setIsIdle(false)
     setClocking(false)
+  }
+
+  function handleContinueWorking() {
+    // Finalize idle period immediately on button click (don't wait for IPC user-active)
+    if (idleStartAtRef.current !== null) {
+      totalIdleRef.current += (Date.now() - idleStartAtRef.current) / 1000
+      idleStartAtRef.current = null
+    }
+    setIdleStartAt(null)
+    setIsIdle(false)
   }
 
   if (loading) return <div className="ev-loading">Loading…</div>
@@ -94,8 +167,15 @@ export default function EmployeeView({ profile, onSignOut }) {
   const totalHours = Number(fresh.hours_worked) || 0
   const bonuses = Number(fresh.bonuses) || 0
   const fines = Number(fresh.fines) || 0
-  const sessionEarned = (elapsed / 3600) * rate
   const totalNet = Math.max(0, totalHours * rate + bonuses - fines)
+
+  // Activity-adjusted values (idle time excluded from salary)
+  const currentIdleContrib = idleStartAtRef.current !== null
+    ? (Date.now() - idleStartAtRef.current) / 1000 : 0
+  const effectiveIdleSecs = totalIdleRef.current + currentIdleContrib
+  const activeSecs = Math.max(0, elapsed - effectiveIdleSecs)
+  const activityPct = elapsed > 30 ? Math.round((activeSecs / elapsed) * 100) : 100
+  const sessionEarned = (activeSecs / 3600) * rate  // only active time pays
 
   const h = Math.floor(elapsed / 3600)
   const m = Math.floor((elapsed % 3600) / 60)
@@ -128,9 +208,9 @@ export default function EmployeeView({ profile, onSignOut }) {
         </div>
 
         {/* Status pill */}
-        <div className={`ev-sidebar-status ${activeSession ? 'ev-status-live' : 'ev-status-off'}`}>
-          <span className={activeSession ? 'counter-dot' : 'counter-dot-off'} />
-          {activeSession ? 'Working now' : 'Not clocked in'}
+        <div className={`ev-sidebar-status ${activeSession ? (isIdle ? 'ev-status-idle' : 'ev-status-live') : 'ev-status-off'}`}>
+          <span className={activeSession ? (isIdle ? 'counter-dot-idle' : 'counter-dot') : 'counter-dot-off'} />
+          {activeSession ? (isIdle ? 'Idle — paused' : 'Working now') : 'Not clocked in'}
         </div>
 
         {/* Nav */}
@@ -166,8 +246,15 @@ export default function EmployeeView({ profile, onSignOut }) {
             bonuses={bonuses} fines={fines} totalNet={totalNet}
             clocking={clocking}
             clockIn={clockIn} clockOut={clockOut}
+            isIdle={isIdle} activityPct={activityPct}
+            activeSecs={activeSecs}
           />
         )}
+
+      {/* Idle overlay — shown on top of everything when user goes idle while clocked in */}
+      {isIdle && activeSession && (
+        <IdleModal idleStartAt={idleStartAt} onContinue={handleContinueWorking} />
+      )}
         {activeNav === 'profile' && <ProfilePanel fresh={fresh} setFresh={setFresh} />}
         {activeNav === 'faq' && <FAQPanel />}
       </div>
@@ -175,8 +262,39 @@ export default function EmployeeView({ profile, onSignOut }) {
   )
 }
 
+// ── Idle modal ───────────────────────────────────────────────────────────────
+function IdleModal({ idleStartAt, onContinue }) {
+  const [secs, setSecs] = useState(() =>
+    idleStartAt ? Math.floor((Date.now() - idleStartAt) / 1000) : 0
+  )
+  useEffect(() => {
+    const id = setInterval(() => {
+      setSecs(idleStartAt ? Math.floor((Date.now() - idleStartAt) / 1000) : 0)
+    }, 1000)
+    return () => clearInterval(id)
+  }, [idleStartAt])
+
+  const h = Math.floor(secs / 3600)
+  const m = Math.floor((secs % 3600) / 60)
+  const s = secs % 60
+  const timeStr = h > 0 ? `${h}h ${m}m ${s}s` : m > 0 ? `${m}m ${s}s` : `${s}s`
+
+  return (
+    <div className="idle-overlay">
+      <div className="idle-modal">
+        <div className="idle-modal-icon">⏸</div>
+        <h2 className="idle-modal-title">Timer Paused</h2>
+        <p className="idle-modal-desc">No mouse or keyboard activity detected.<br />Idle time is not counted as work.</p>
+        <div className="idle-modal-timer">{timeStr}</div>
+        <p className="idle-modal-sub">Away time will be deducted from your session earnings.</p>
+        <button className="idle-continue-btn" onClick={onContinue}>▶ Continue Working</button>
+      </div>
+    </div>
+  )
+}
+
 // ── Dashboard ────────────────────────────────────────────────────────────────
-function DashboardPanel({ fresh, activeSession, elapsed, h, m, s, sessionEarned, rate, totalHours, bonuses, fines, totalNet, clocking, clockIn, clockOut }) {
+function DashboardPanel({ fresh, activeSession, elapsed, h, m, s, sessionEarned, rate, totalHours, bonuses, fines, totalNet, clocking, clockIn, clockOut, isIdle, activityPct, activeSecs }) {
   if (!fresh?.department) {
     return (
       <div className="ev-content-area">
@@ -207,7 +325,9 @@ function DashboardPanel({ fresh, activeSession, elapsed, h, m, s, sessionEarned,
 
         <div className="counter-status">
           {activeSession
-            ? <><span className="counter-dot" />Live — Shift in progress</>
+            ? isIdle
+              ? <><span className="counter-dot-idle" />Paused — No activity detected</>
+              : <><span className="counter-dot" />Live — Shift in progress</>
             : <><span className="counter-dot-off" />Not clocked in</>}
         </div>
 
@@ -231,6 +351,12 @@ function DashboardPanel({ fresh, activeSession, elapsed, h, m, s, sessionEarned,
         <div className="counter-earned">
           <span className="counter-earned-label">Earned this shift</span>
           <span className="counter-earned-value">{fmt(sessionEarned)}</span>
+          {activeSession && elapsed > 30 && (
+            <span className="counter-activity-pct" style={{ color: activityPct >= 80 ? 'var(--positive)' : activityPct >= 50 ? '#f59e0b' : 'var(--negative)' }}>
+              <Activity size={11} style={{ display: 'inline', marginRight: 3 }} />
+              {activityPct}% active
+            </span>
+          )}
         </div>
 
         <button
@@ -276,7 +402,23 @@ function DashboardPanel({ fresh, activeSession, elapsed, h, m, s, sessionEarned,
         </div>
       </div>
 
-      <p className="ev-note">Clock in when you start working. Clock out when done — hours are added automatically.</p>
+      {activeSession && elapsed > 30 && (
+        <div className="activity-bar-wrap">
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: 'var(--text-muted)', marginBottom: 4 }}>
+            <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}><Activity size={11} />Activity this session</span>
+            <span style={{ color: activityPct >= 80 ? 'var(--positive)' : activityPct >= 50 ? '#f59e0b' : 'var(--negative)', fontWeight: 600 }}>{activityPct}%</span>
+          </div>
+          <div className="activity-track">
+            <div className="activity-fill" style={{ width: `${activityPct}%`, background: activityPct >= 80 ? 'var(--positive)' : activityPct >= 50 ? '#f59e0b' : 'var(--negative)' }} />
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
+            <span>Active: {Math.floor(activeSecs / 60)}m</span>
+            <span>Idle: {Math.floor((elapsed - activeSecs) / 60)}m</span>
+          </div>
+        </div>
+      )}
+
+      <p className="ev-note">Only active time counts toward your salary. Idle periods are automatically deducted.</p>
 
       <EmployeeTransactions employeeId={fresh.id} />
     </div>

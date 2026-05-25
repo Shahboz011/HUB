@@ -1,4 +1,4 @@
-const { app, BrowserWindow, shell, ipcMain, clipboard } = require('electron')
+const { app, BrowserWindow, shell, ipcMain, clipboard, powerMonitor, Notification } = require('electron')
 const { join } = require('path')
 const { autoUpdater } = require('electron-updater')
 const https = require('https')
@@ -94,6 +94,40 @@ ipcMain.handle('copy-to-clipboard', (_event, text) => {
 ipcMain.handle('install-update', () => {
   autoUpdater.quitAndInstall()
 })
+
+// IPC: employee tells us when they clock in/out so we only notify when tracking
+let isTracking = false
+ipcMain.handle('set-tracking', (_event, val) => { isTracking = !!val })
+
+// ── Activity monitor ────────────────────────────────────────────────────────
+const IDLE_THRESHOLD_SECS = 10 * 60 // 10 minutes
+
+function setupActivityMonitor() {
+  let wasIdle = false
+
+  setInterval(() => {
+    if (!win) return
+    const idleSecs = powerMonitor.getSystemIdleTime()
+    win.webContents.send('idle-tick', idleSecs)
+
+    if (isTracking && idleSecs >= IDLE_THRESHOLD_SECS && !wasIdle) {
+      wasIdle = true
+      win.webContents.send('user-idle', idleSecs)
+
+      if (Notification.isSupported()) {
+        const n = new Notification({
+          title: 'Salary Command Center — Timer Paused',
+          body: 'No activity for 10 minutes. Your work timer has been paused.',
+        })
+        n.on('click', () => { if (win) { win.show(); win.focus() } })
+        n.show()
+      }
+    } else if (wasIdle && idleSecs < 30) {
+      wasIdle = false
+      win.webContents.send('user-active')
+    }
+  }, 10 * 1000)
+}
 
 const PROTOCOL = 'salary-app'
 let win = null
@@ -199,6 +233,7 @@ app.whenReady().then(() => {
   if (!process.env['ELECTRON_RENDERER_URL']) {
     setupAutoUpdater()
   }
+  setupActivityMonitor()
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()

@@ -46,7 +46,7 @@ function AvatarBadge({ name, department }) {
 }
 
 function TableRow({ index, style, data }) {
-  const { employees, onFieldChange, activeSessions, onViewHistory } = data
+  const { employees, onFieldChange, activeSessions, activityMap, onViewHistory } = data
   const emp = employees[index]
   const isEven = index % 2 === 0
   const color = deptColor(emp.department)
@@ -54,6 +54,8 @@ function TableRow({ index, style, data }) {
   const session = activeSessions[emp.id]
   const rate = Number(emp.hourly_rate) || 0
   const sessionEarned = session ? ((Date.now() - new Date(session.started_at).getTime()) / 3600000) * rate : 0
+  const actStatus = activityMap?.[emp.id]
+  const empIsIdle = session && actStatus?.is_idle === true
 
   return (
     <div style={style} className={`table-row ${isEven ? 'row-even' : 'row-odd'}`}>
@@ -80,9 +82,11 @@ function TableRow({ index, style, data }) {
       <div className="col col-live">
         {session ? (
           <div className="live-badge">
-            <span className="live-badge-dot" />
+            <span className={empIsIdle ? 'live-badge-dot-idle' : 'live-badge-dot'} />
             <div className="live-badge-info">
-              <span className="live-badge-time">{sessionElapsed(session.started_at)}</span>
+              <span className="live-badge-time" style={empIsIdle ? { color: '#f59e0b' } : {}}>
+                {empIsIdle ? 'Idle' : sessionElapsed(session.started_at)}
+              </span>
               <span className="live-badge-earned">{fmt(sessionEarned)}</span>
             </div>
           </div>
@@ -195,6 +199,7 @@ function SummaryBar({ employees }) {
 export default function EmployeeTable({ departments }) {
   const [employees, setEmployees] = useState([])
   const [activeSessions, setActiveSessions] = useState({})
+  const [activityMap, setActivityMap] = useState({}) // { [empId]: { is_idle, ts } }
   const [, setTick] = useState(0)
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
@@ -253,9 +258,17 @@ export default function EmployeeTable({ departments }) {
       }
     }, 15000)
 
+    // Activity broadcasts from employees (idle/active status)
+    const activitySub = supabase.channel('employee-activity')
+      .on('broadcast', { event: 'status' }, ({ payload }) => {
+        setActivityMap(prev => ({ ...prev, [payload.employee_id]: { is_idle: payload.is_idle, ts: payload.ts } }))
+      })
+      .subscribe()
+
     return () => {
       supabase.removeChannel(profileSub)
       supabase.removeChannel(sessionSub)
+      supabase.removeChannel(activitySub)
       clearInterval(pollId)
     }
   }, [])
@@ -328,7 +341,7 @@ export default function EmployeeTable({ departments }) {
               <List
                 height={height} width={width}
                 itemCount={filtered.length} itemSize={52}
-                itemData={{ employees: filtered, onFieldChange, activeSessions, onViewHistory: setSelectedEmployee }}
+                itemData={{ employees: filtered, onFieldChange, activeSessions, activityMap, onViewHistory: setSelectedEmployee }}
                 overscanCount={10}
               >
                 {TableRow}

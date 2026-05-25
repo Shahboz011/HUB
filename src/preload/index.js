@@ -11,4 +11,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onUpdateReady: (callback) => ipcRenderer.on('update-ready', () => callback()),
   onUpdateError: (callback) => ipcRenderer.on('update-error', (_e, msg) => callback(msg)),
   installUpdate: () => ipcRenderer.invoke('install-update'),
+  setTracking: (val) => ipcRenderer.invoke('set-tracking', val),
+  onIdleTick: (cb) => ipcRenderer.on('idle-tick', (_e, secs) => cb(secs)),
+  onUserIdle: (cb) => ipcRenderer.on('user-idle', (_e, secs) => cb(secs)),
+  onUserActive: (cb) => ipcRenderer.on('user-active', () => cb()),
 })
