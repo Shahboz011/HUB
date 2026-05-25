@@ -208,22 +208,27 @@ function ScreenshotsSection({ employeeId }) {
   const [screenshots, setScreenshots] = useState([])
   const [loading, setLoading] = useState(true)
   const [expanded, setExpanded] = useState(null)
+  const [debugInfo, setDebugInfo] = useState('')
 
   useEffect(() => {
     async function load() {
+      setDebugInfo('querying db...')
       const { data, error } = await supabase
         .from('screenshots')
         .select('*')
         .eq('employee_id', employeeId)
         .order('taken_at', { ascending: false })
         .limit(48)
-      if (error || !data?.length) { setLoading(false); return }
+      if (error) { setDebugInfo('db_error: ' + error.message); setLoading(false); return }
+      if (!data?.length) { setDebugInfo('db_empty: 0 rows'); setLoading(false); return }
+      setDebugInfo(`db_ok: ${data.length} rows, signing urls...`)
       const signedUrls = window.electronAPI?.signScreenshotUrls
         ? await window.electronAPI.signScreenshotUrls(data.map(s => s.path))
         : null
-      if (signedUrls) {
-        setScreenshots(data.map((s, i) => ({ ...s, url: signedUrls[i] })).filter(s => s.url))
-      }
+      if (!signedUrls) { setDebugInfo('sign_failed: no electronAPI or returned null'); setLoading(false); return }
+      const withUrls = data.map((s, i) => ({ ...s, url: signedUrls[i] })).filter(s => s.url)
+      setDebugInfo(`sign_ok: ${signedUrls.length} urls, ${withUrls.length} valid`)
+      setScreenshots(withUrls)
       setLoading(false)
     }
     load()
@@ -238,6 +243,11 @@ function ScreenshotsSection({ employeeId }) {
           {!loading && screenshots.length > 0 && (
             <span style={{ fontWeight: 400, color: 'var(--text-muted)', fontSize: 13, marginLeft: 4 }}>
               {screenshots.length} captured
+            </span>
+          )}
+          {debugInfo && (
+            <span style={{ fontWeight: 400, fontSize: 11, marginLeft: 6, color: debugInfo.startsWith('sign_ok') ? '#10b981' : '#f59e0b' }}>
+              [{debugInfo}]
             </span>
           )}
         </h3>
