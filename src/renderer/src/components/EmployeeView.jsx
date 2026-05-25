@@ -24,6 +24,7 @@ export default function EmployeeView({ profile, onSignOut }) {
   const [clocking, setClocking] = useState(false)
   const [activeNav, setActiveNav] = useState('dashboard')
   const [appVersion, setAppVersion] = useState('')
+  const [screenshotStatus, setScreenshotStatus] = useState(null) // null | 'ok' | string(error)
 
   // Activity tracking
   const [isIdle, setIsIdle] = useState(false)
@@ -102,16 +103,28 @@ export default function EmployeeView({ profile, onSignOut }) {
     if (!activeSession || !window.electronAPI?.captureScreen) return
     async function capture() {
       try {
-        const dataUrl = await window.electronAPI.captureScreen()
-        if (!dataUrl) return
-        const base64 = dataUrl.split(',')[1]
+        const result = await window.electronAPI.captureScreen()
+        if (!result?.ok) {
+          setScreenshotStatus('capture_err:' + (result?.error || 'null_result'))
+          return
+        }
+        const base64 = result.dataUrl.split(',')[1]
         const bytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0))
         const filename = `${profile.id}/${Date.now()}.jpg`
-        const { error } = await supabase.storage.from('screenshots').upload(filename, bytes, { contentType: 'image/jpeg' })
-        if (!error) {
-          await supabase.from('screenshots').insert({ employee_id: profile.id, path: filename, taken_at: new Date().toISOString() })
+        const { error: uploadErr } = await supabase.storage.from('screenshots').upload(filename, bytes, { contentType: 'image/jpeg' })
+        if (uploadErr) {
+          setScreenshotStatus('upload_err:' + uploadErr.message)
+          return
         }
-      } catch { /* silently fail if bucket/table not configured yet */ }
+        const { error: insertErr } = await supabase.from('screenshots').insert({ employee_id: profile.id, path: filename, taken_at: new Date().toISOString() })
+        if (insertErr) {
+          setScreenshotStatus('insert_err:' + insertErr.message)
+          return
+        }
+        setScreenshotStatus('ok')
+      } catch (e) {
+        setScreenshotStatus('exception:' + (e?.message || 'unknown'))
+      }
     }
     capture()
     const id = setInterval(capture, 5 * 60 * 1000)
@@ -256,6 +269,11 @@ export default function EmployeeView({ profile, onSignOut }) {
           ))}
         </nav>
 
+        {screenshotStatus && (
+          <div className={`ev-ss-status ${screenshotStatus === 'ok' ? 'ev-ss-ok' : 'ev-ss-err'}`} title={screenshotStatus}>
+            {screenshotStatus === 'ok' ? '📷 Screenshot OK' : '⚠ Screenshot: ' + screenshotStatus}
+          </div>
+        )}
         {appVersion && <div className="ev-version">v{appVersion}</div>}
 
         {/* Sign out */}

@@ -1,4 +1,4 @@
-const { app, BrowserWindow, shell, ipcMain, clipboard, powerMonitor, Notification } = require('electron')
+const { app, BrowserWindow, shell, ipcMain, clipboard, powerMonitor, Notification, desktopCapturer } = require('electron')
 const { join } = require('path')
 const { autoUpdater } = require('electron-updater')
 const https = require('https')
@@ -87,6 +87,22 @@ ipcMain.handle('delete-member', async (_event, { userId }) => {
 
 // IPC: get app version
 ipcMain.handle('get-version', () => app.getVersion())
+
+// IPC: capture screen via desktopCapturer (main process — more reliable than preload)
+ipcMain.handle('capture-screen', async () => {
+  try {
+    const sources = await desktopCapturer.getSources({
+      types: ['screen'],
+      thumbnailSize: { width: 1280, height: 720 },
+    })
+    if (!sources || sources.length === 0) return { ok: false, error: 'no_sources' }
+    const buf = sources[0].thumbnail.toJPEG(60)
+    if (!buf || buf.length === 0) return { ok: false, error: 'empty_thumbnail' }
+    return { ok: true, dataUrl: 'data:image/jpeg;base64,' + buf.toString('base64') }
+  } catch (e) {
+    return { ok: false, error: e.message || 'unknown' }
+  }
+})
 
 // IPC: copy text to clipboard
 ipcMain.handle('copy-to-clipboard', (_event, text) => {
