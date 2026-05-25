@@ -229,22 +229,24 @@ function ScreenshotsSection({ employeeId }) {
     load()
   }, [employeeId])
 
-  if (loading) return null
-
   return (
     <div className="bf-wrap">
       <div className="bf-header">
         <h3 className="bf-title" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           <Camera size={15} />
           Screenshots
-          <span style={{ fontWeight: 400, color: 'var(--text-muted)', fontSize: 13, marginLeft: 4 }}>
-            {screenshots.length ? `${screenshots.length} captured` : ''}
-          </span>
+          {!loading && screenshots.length > 0 && (
+            <span style={{ fontWeight: 400, color: 'var(--text-muted)', fontSize: 13, marginLeft: 4 }}>
+              {screenshots.length} captured
+            </span>
+          )}
         </h3>
       </div>
 
-      {screenshots.length === 0 ? (
-        <p className="bf-empty">No screenshots yet — captured every 5 minutes while clocked in.</p>
+      {loading ? (
+        <p className="bf-empty">Loading…</p>
+      ) : screenshots.length === 0 ? (
+        <p className="bf-empty">No screenshots yet — taken every 5 min while clocked in. Requires app v1.6.0+.</p>
       ) : (
         <div className="ss-grid">
           {screenshots.map(s => (
