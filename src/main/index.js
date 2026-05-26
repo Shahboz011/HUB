@@ -125,7 +125,7 @@ ipcMain.handle('fetch-screenshot-images', async (_event, paths) => {
 // Operates entirely on in-process Buffers; the raw NativeImage pixel data never
 // leaves the main process or touches any storage/network path.
 function blurBitmap(buffer, width, height) {
-  const R = 20
+  const R = 10
   const PASSES = 3
   const stride = width * 4
   const diam = R * 2 + 1
