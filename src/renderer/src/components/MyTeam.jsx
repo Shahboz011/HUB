@@ -83,7 +83,7 @@ function activityPct(session) {
   return Math.round((Math.max(0, wall - idle) / wall) * 100)
 }
 
-export default function MyTeam() {
+export default function MyTeam({ managedDept }) {
   const [employees,      setEmployees]      = useState([])
   const [activeSessions, setActiveSessions] = useState({})
   const [activityMap,    setActivityMap]    = useState({})
@@ -148,19 +148,20 @@ export default function MyTeam() {
 
   if (loading) return <div className="adash-loading">Loading team…</div>
 
-  const total        = employees.length
-  const activeCount  = employees.filter(e => activeSessions[e.id]).length
-  const breakCount   = employees.filter(e => ['break', 'restroom', 'lunch'].includes(getStatus(e.id, activeSessions, activityMap).type)).length
-  const idleCount    = employees.filter(e => getStatus(e.id, activeSessions, activityMap).type === 'idle').length
-  const offlineCount = employees.filter(e => !activeSessions[e.id]).length
+  const allEmployees = managedDept ? employees.filter(e => e.department === managedDept) : employees
+  const total        = allEmployees.length
+  const activeCount  = allEmployees.filter(e => activeSessions[e.id]).length
+  const breakCount   = allEmployees.filter(e => ['break', 'restroom', 'lunch'].includes(getStatus(e.id, activeSessions, activityMap).type)).length
+  const idleCount    = allEmployees.filter(e => getStatus(e.id, activeSessions, activityMap).type === 'idle').length
+  const offlineCount = allEmployees.filter(e => !activeSessions[e.id]).length
 
   const ORDER = { working: 0, break: 1, restroom: 2, lunch: 3, idle: 4, offline: 5 }
-  const sorted = [...employees].sort((a, b) =>
+  const sorted = [...allEmployees].sort((a, b) =>
     ORDER[getStatus(a.id, activeSessions, activityMap).type] -
     ORDER[getStatus(b.id, activeSessions, activityMap).type]
   )
 
-  const departments = ['All', ...Array.from(new Set(employees.map(e => e.department).filter(Boolean))).sort()]
+  const departments = managedDept ? [] : ['All', ...Array.from(new Set(employees.map(e => e.department).filter(Boolean))).sort()]
 
   const filtered = sorted.filter(e => {
     const q = search.toLowerCase()
@@ -169,7 +170,7 @@ export default function MyTeam() {
     return matchSearch && matchDept
   })
 
-  const topPerformers = employees
+  const topPerformers = allEmployees
     .filter(e => activeSessions[e.id])
     .map(e => ({ emp: e, pct: activityPct(activeSessions[e.id]) ?? 0 }))
     .sort((a, b) => b.pct - a.pct)

@@ -19,7 +19,7 @@ function calcNet(hours, emp) {
   return Math.max(0, hours * Number(emp.hourly_rate) + Number(emp.bonuses) - Number(emp.fines))
 }
 
-export default function SalaryReport() {
+export default function SalaryReport({ managedDept }) {
   const [employees, setEmployees] = useState([])
   const [sessionsMap, setSessionsMap] = useState({})
   const [loading, setLoading] = useState(true)
@@ -129,17 +129,19 @@ export default function SalaryReport() {
 
   if (loading) return <div className="table-loading">Loading salary report…</div>
 
+  const visible = managedDept ? employees.filter(e => e.department === managedDept) : employees
+
   const groups = {}
-  employees.forEach(emp => {
+  visible.forEach(emp => {
     const key = emp.department || '— Unassigned —'
     if (!groups[key]) groups[key] = []
     groups[key].push(emp)
   })
 
-  const grandHours = employees.reduce((sum, e) => sum + calcHours(e.id, sessionsMap), 0)
-  const grandTotal = employees.reduce((sum, e) => sum + calcNet(calcHours(e.id, sessionsMap), e), 0)
-  const grandBonuses = employees.reduce((sum, e) => sum + Number(e.bonuses), 0)
-  const grandFines = employees.reduce((sum, e) => sum + Number(e.fines), 0)
+  const grandHours = visible.reduce((sum, e) => sum + calcHours(e.id, sessionsMap), 0)
+  const grandTotal = visible.reduce((sum, e) => sum + calcNet(calcHours(e.id, sessionsMap), e), 0)
+  const grandBonuses = visible.reduce((sum, e) => sum + Number(e.bonuses), 0)
+  const grandFines = visible.reduce((sum, e) => sum + Number(e.fines), 0)
 
   return (
     <div className="sr-wrap">

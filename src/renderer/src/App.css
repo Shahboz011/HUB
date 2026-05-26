@@ -716,7 +716,8 @@ html, body, #root {
   font-size: 10px; font-weight: 700; padding: 1px 6px;
   border-radius: 20px; width: fit-content;
 }
-.role-admin { background: #ede9fe; color: #7c3aed; border: 1px solid #ddd6fe; }
+.role-admin    { background: #ede9fe; color: #7c3aed; border: 1px solid #ddd6fe; }
+.role-subadmin { background: #fff7ed; color: #ea580c; border: 1px solid #fed7aa; }
 .role-employee { background: #f0fdf4; color: #059669; border: 1px solid #bbf7d0; }
 
 .sign-out-btn {
@@ -872,7 +873,8 @@ html, body, #root {
 .emp-select:focus { border-color: var(--accent); }
 .emp-select:disabled { opacity: .5; cursor: not-allowed; }
 .emp-role-select { font-weight: 600; }
-.emp-role-select.role-admin { color: #7c3aed; background: #ede9fe; border-color: #ddd6fe; }
+.emp-role-select.role-admin    { color: #7c3aed; background: #ede9fe; border-color: #ddd6fe; }
+.emp-role-select.role-subadmin { color: #ea580c; background: #fff7ed; border-color: #fed7aa; }
 .emp-role-select.role-employee { color: var(--text-secondary); }
 
 /* ── Department management ────────────────────────────────── */

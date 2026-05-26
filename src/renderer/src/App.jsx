@@ -145,11 +145,14 @@ export default function App() {
   // New invited user: show profile setup before anything else
   if (profile && !profile.full_name) return <CompleteProfile session={session} />
 
-  const isAdmin = profile?.role === 'admin'
-  const displayName = profile?.full_name || session.user.email
+  const isSuperAdmin = profile?.role === 'admin'
+  const isSubAdmin   = profile?.role === 'subadmin'
+  const isAnyAdmin   = isSuperAdmin || isSubAdmin
+  const managedDept  = isSubAdmin ? (profile?.department || null) : null
+  const displayName  = profile?.full_name || session.user.email
 
   // Employee users get the full-screen sidebar layout — no top header
-  if (!isAdmin) {
+  if (!isAnyAdmin) {
     return (
       <div className="app" style={{ overflow: 'hidden' }}>
         <EmployeeView profile={profile} onSignOut={handleSignOut} />
@@ -157,6 +160,9 @@ export default function App() {
       </div>
     )
   }
+
+  const roleBadgeLabel = isSuperAdmin ? 'CEO' : 'Sub-Admin'
+  const roleBadgeClass = isSuperAdmin ? 'role-admin' : 'role-subadmin'
 
   return (
     <div className="admin-shell">
@@ -168,7 +174,7 @@ export default function App() {
           </div>
           <div>
             <div className="admin-sb-title">SCC</div>
-            <div className="admin-sb-sub">Command Center</div>
+            <div className="admin-sb-sub">{managedDept ? managedDept : 'Command Center'}</div>
           </div>
         </div>
 
@@ -192,7 +198,7 @@ export default function App() {
             <div className="admin-sb-avatar">{displayName[0]?.toUpperCase()}</div>
             <div className="admin-sb-userinfo">
               <span className="admin-sb-username">{displayName}</span>
-              <span className="role-badge role-admin">Admin</span>
+              <span className={`role-badge ${roleBadgeClass}`}>{roleBadgeLabel}</span>
             </div>
           </div>
           <button className="admin-sb-signout" onClick={handleSignOut} title="Sign out">
@@ -203,11 +209,11 @@ export default function App() {
 
       {/* ── Main content ── */}
       <div className="admin-content">
-        {activeTab === 'dashboard'  && <AdminDashboard adminName={displayName} />}
-        {activeTab === 'myteam'     && <MyTeam />}
-        {activeTab === 'employees'  && <main className="app-main"><EmployeeTable departments={departments} /></main>}
-        {activeTab === 'salary'     && <main className="app-main"><SalaryReport /></main>}
-        {activeTab === 'admin'      && <main className="app-main"><AdminPanel departments={departments} onDepartmentsChange={setDepartments} currentUserId={profile?.id} /></main>}
+        {activeTab === 'dashboard'  && <AdminDashboard adminName={displayName} managedDept={managedDept} />}
+        {activeTab === 'myteam'     && <MyTeam managedDept={managedDept} />}
+        {activeTab === 'employees'  && <main className="app-main"><EmployeeTable departments={departments} managedDept={managedDept} /></main>}
+        {activeTab === 'salary'     && <main className="app-main"><SalaryReport managedDept={managedDept} /></main>}
+        {activeTab === 'admin'      && <main className="app-main"><AdminPanel departments={departments} onDepartmentsChange={setDepartments} currentUserId={profile?.id} isSuperAdmin={isSuperAdmin} managedDept={managedDept} /></main>}
       </div>
 
       {updateState && <UpdateBanner state={updateState} progress={updateProgress} version={updateVersion} onRestart={() => window.electronAPI?.installUpdate()} onDismiss={() => setUpdateState(null)} />}

@@ -29,7 +29,7 @@ function initials(name) {
 }
 
 // ── Department detail: members + invite ──────────────────────────────────────
-function DeptMembers({ dept, employees, departments, onBack, onEmployeeUpdate, onEmployeeDelete, currentUserId }) {
+function DeptMembers({ dept, employees, departments, onBack, onEmployeeUpdate, onEmployeeDelete, currentUserId, isSuperAdmin = true }) {
   const [showInvite, setShowInvite] = useState(false)
   const [invEmail, setInvEmail] = useState('')
   const [invPosition, setInvPosition] = useState('')
@@ -92,10 +92,12 @@ function DeptMembers({ dept, employees, departments, onBack, onEmployeeUpdate, o
   return (
     <div className="dept-detail-wrap">
       <div className="att-topbar">
-        <button className="att-back-btn" onClick={onBack}>
-          <ArrowLeft size={16} />
-          Departments
-        </button>
+        {onBack && (
+          <button className="att-back-btn" onClick={onBack}>
+            <ArrowLeft size={16} />
+            Departments
+          </button>
+        )}
         <span className="att-breadcrumb">{dept}</span>
 
         <button
@@ -237,7 +239,7 @@ function DeptMembers({ dept, employees, departments, onBack, onEmployeeUpdate, o
 }
 
 // ── Main AdminPanel ───────────────────────────────────────────────────────────
-export default function AdminPanel({ departments, onDepartmentsChange, currentUserId }) {
+export default function AdminPanel({ departments, onDepartmentsChange, currentUserId, isSuperAdmin = true, managedDept = null }) {
   const [activeSection, setActiveSection] = useState('departments')
   const [selectedDept, setSelectedDept] = useState(null)
   const [employees, setEmployees] = useState([])
@@ -347,13 +349,30 @@ export default function AdminPanel({ departments, onDepartmentsChange, currentUs
 
   const filteredEmps = employees.filter(e => {
     const q = empSearch.toLowerCase()
-    return !empSearch || e.full_name?.toLowerCase().includes(q) || e.email?.toLowerCase().includes(q)
+    const matchSearch = !empSearch || e.full_name?.toLowerCase().includes(q) || e.email?.toLowerCase().includes(q)
+    const matchDept = managedDept ? e.department === managedDept : true
+    return matchSearch && matchDept
   })
 
   const deptStats = departments.map(dept => ({
     dept,
     count: employees.filter(e => e.department === dept).length,
   }))
+
+  // Sub-admin: jump straight to their department view
+  if (managedDept) {
+    return (
+      <DeptMembers
+        dept={managedDept}
+        employees={employees}
+        departments={departments}
+        onBack={null}
+        onEmployeeUpdate={updateLocalEmployee}
+        onEmployeeDelete={removeLocalEmployee}
+        currentUserId={currentUserId}
+      />
+    )
+  }
 
   if (selectedDept) {
     return (
@@ -603,15 +622,23 @@ export default function AdminPanel({ departments, onDepartmentsChange, currentUs
                           if (!window.confirm('You are about to remove your own admin access. You will be locked out of the admin panel. Continue?')) return
                         }
                         if (newRole === 'admin' && emp.role !== 'admin') {
-                          if (!window.confirm(`Grant admin access to ${emp.full_name || emp.email}? They will have full control over all employees and data.`)) return
+                          if (!window.confirm(`Grant full CEO access to ${emp.full_name || emp.email}? They will have access to all departments and data.`)) return
+                        }
+                        if (newRole === 'subadmin' && !emp.department) {
+                          window.alert('Assign a department to this user first before making them a Sub-Admin.')
+                          return
+                        }
+                        if (newRole === 'subadmin') {
+                          if (!window.confirm(`Make ${emp.full_name || emp.email} a Sub-Admin for the "${emp.department}" department? They will only see their department.`)) return
                         }
                         updateEmployee(emp.id, 'role', newRole)
                       }}
-                      className={`emp-role-select emp-select ${emp.role === 'admin' ? 'role-admin' : 'role-employee'}`}
-                      style={{ width: 110 }}
+                      className={`emp-role-select emp-select ${emp.role === 'admin' ? 'role-admin' : emp.role === 'subadmin' ? 'role-subadmin' : 'role-employee'}`}
+                      style={{ width: 120 }}
                     >
                       <option value="employee">Employee</option>
-                      <option value="admin">Admin</option>
+                      <option value="subadmin">Sub-Admin</option>
+                      <option value="admin">CEO / Admin</option>
                     </select>
 
                     <div style={{ width: 80, display: 'flex', justifyContent: 'flex-end' }}>

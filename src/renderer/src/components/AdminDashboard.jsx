@@ -70,7 +70,7 @@ function activityPct(session) {
   return Math.round((active / wall) * 100)
 }
 
-export default function AdminDashboard({ adminName }) {
+export default function AdminDashboard({ adminName, managedDept }) {
   const [employees,     setEmployees]     = useState([])
   const [activeSessions, setActiveSessions] = useState({})
   const [activityMap,   setActivityMap]   = useState({})
@@ -135,38 +135,37 @@ export default function AdminDashboard({ adminName }) {
 
   if (loading) return <div className="adash-loading">Loading dashboard…</div>
 
-  const workingCount  = employees.filter(e => getStatus(e.id, activeSessions, activityMap).type === 'working').length
-  const awayCount     = employees.filter(e => ['break','restroom','lunch','idle'].includes(getStatus(e.id, activeSessions, activityMap).type)).length
-  const offlineCount  = employees.filter(e => !activeSessions[e.id]).length
+  const visible = managedDept ? employees.filter(e => e.department === managedDept) : employees
+
+  const workingCount  = visible.filter(e => getStatus(e.id, activeSessions, activityMap).type === 'working').length
+  const awayCount     = visible.filter(e => ['break','restroom','lunch','idle'].includes(getStatus(e.id, activeSessions, activityMap).type)).length
+  const offlineCount  = visible.filter(e => !activeSessions[e.id]).length
 
   const today = new Date().toLocaleDateString('en-US', {
     weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', timeZone: NY,
   })
 
-  // Sort: working → break types → idle → offline
   const ORDER = { working: 0, break: 1, restroom: 2, lunch: 3, idle: 4, offline: 5 }
-  const sorted = [...employees].sort((a, b) =>
+  const sorted = [...visible].sort((a, b) =>
     ORDER[getStatus(a.id, activeSessions, activityMap).type] -
     ORDER[getStatus(b.id, activeSessions, activityMap).type]
   )
 
   return (
     <div className="adash">
-      {/* ── Page header ─────────────────────────────── */}
       <div className="adash-header">
         <div>
-          <h2 className="adash-title">Dashboard</h2>
+          <h2 className="adash-title">Dashboard{managedDept ? ` — ${managedDept}` : ''}</h2>
           <p className="adash-welcome">Welcome back, <strong>{adminName}</strong>! Here's what's happening with your team today.</p>
         </div>
         <span className="adash-date">{today}</span>
       </div>
 
-      {/* ── Stat cards ──────────────────────────────── */}
       <div className="adash-stats">
         <div className="adash-stat-card">
           <div className="adash-stat-icon" style={{ background: '#6366f112', color: '#6366f1' }}><Users size={20} /></div>
           <div className="adash-stat-body">
-            <span className="adash-stat-num">{employees.length}</span>
+            <span className="adash-stat-num">{visible.length}</span>
             <span className="adash-stat-lbl">My Team</span>
           </div>
         </div>
@@ -193,13 +192,11 @@ export default function AdminDashboard({ adminName }) {
         </div>
       </div>
 
-      {/* ── Body: table + side panel ─────────────────── */}
       <div className="adash-body">
-        {/* Team overview table */}
         <div className="adash-team">
           <div className="adash-section-hd">
             <h3 className="adash-section-title">Team Overview</h3>
-            <span className="adash-section-count">{employees.length} employees</span>
+            <span className="adash-section-count">{visible.length} employees</span>
           </div>
 
           <div className="adash-table-wrap">
@@ -233,39 +230,27 @@ export default function AdminDashboard({ adminName }) {
                         <span className="adash-emp-email">{emp.email}</span>
                       </div>
                     </div>
-
                     <div className="adash-td w-dept">
                       {emp.department
                         ? <span className="adash-dept" style={{ background: color + '14', color, border: `1px solid ${color}28` }}>{emp.department}</span>
                         : <span className="adash-muted">—</span>}
                     </div>
-
-                    <div className="adash-td w-status">
-                      <StatusBadge type={status.type} label={status.label} />
-                    </div>
-
+                    <div className="adash-td w-status"><StatusBadge type={status.type} label={status.label} /></div>
                     <div className="adash-td w-time adash-mono">
                       {session ? elapsed(session.started_at) : <span className="adash-muted">—</span>}
                     </div>
-
                     <div className="adash-td w-breaks">
                       {breaks !== null
                         ? <span className={`adash-breaks ${breaks >= 2 ? 'adash-breaks-used' : ''}`}>{breaks}/2</span>
                         : <span className="adash-muted">—</span>}
                     </div>
-
                     <div className="adash-td w-activity">
                       {pct !== null ? (
                         <div className="adash-act-wrap">
                           <div className="adash-act-bar">
-                            <div className="adash-act-fill" style={{
-                              width: `${pct}%`,
-                              background: pct >= 80 ? '#10b981' : pct >= 50 ? '#f59e0b' : '#ef4444'
-                            }} />
+                            <div className="adash-act-fill" style={{ width: `${pct}%`, background: pct >= 80 ? '#10b981' : pct >= 50 ? '#f59e0b' : '#ef4444' }} />
                           </div>
-                          <span className="adash-act-pct" style={{
-                            color: pct >= 80 ? '#10b981' : pct >= 50 ? '#f59e0b' : '#ef4444'
-                          }}>{pct}%</span>
+                          <span className="adash-act-pct" style={{ color: pct >= 80 ? '#10b981' : pct >= 50 ? '#f59e0b' : '#ef4444' }}>{pct}%</span>
                         </div>
                       ) : <span className="adash-muted">—</span>}
                     </div>
@@ -276,16 +261,14 @@ export default function AdminDashboard({ adminName }) {
           </div>
         </div>
 
-        {/* Today's summary panel */}
         <div className="adash-side">
           <div className="adash-section-hd">
             <h3 className="adash-section-title">Today's Summary</h3>
           </div>
 
-          {/* Live activity */}
           <div className="adash-side-block">
             <div className="adash-side-label">Currently Active</div>
-            {employees.filter(e => activeSessions[e.id]).length === 0 ? (
+            {visible.filter(e => activeSessions[e.id]).length === 0 ? (
               <p className="adash-muted" style={{ fontSize: 12, padding: '10px 0' }}>No one is clocked in right now.</p>
             ) : (
               <div className="adash-activity-list">
@@ -310,15 +293,14 @@ export default function AdminDashboard({ adminName }) {
             )}
           </div>
 
-          {/* Quick stats */}
           <div className="adash-side-block" style={{ marginTop: 16 }}>
             <div className="adash-side-label">Quick Stats</div>
             <div className="adash-qs">
               {[
-                { label: 'Clocked in', value: employees.filter(e => activeSessions[e.id]).length, color: '#10b981' },
+                { label: 'Clocked in', value: visible.filter(e => activeSessions[e.id]).length, color: '#10b981' },
                 { label: 'Working', value: workingCount, color: '#059669' },
-                { label: 'On break', value: employees.filter(e => ['break','restroom','lunch'].includes(getStatus(e.id, activeSessions, activityMap).type)).length, color: '#3b82f6' },
-                { label: 'Idle', value: employees.filter(e => getStatus(e.id, activeSessions, activityMap).type === 'idle').length, color: '#f59e0b' },
+                { label: 'On break', value: visible.filter(e => ['break','restroom','lunch'].includes(getStatus(e.id, activeSessions, activityMap).type)).length, color: '#3b82f6' },
+                { label: 'Idle', value: visible.filter(e => getStatus(e.id, activeSessions, activityMap).type === 'idle').length, color: '#f59e0b' },
                 { label: 'Offline', value: offlineCount, color: '#94a3b8' },
               ].map(({ label, value, color }) => (
                 <div key={label} className="adash-qs-row">
@@ -329,17 +311,14 @@ export default function AdminDashboard({ adminName }) {
             </div>
           </div>
 
-          {/* Break usage today */}
-          {employees.some(e => activeSessions[e.id] && Number(activeSessions[e.id].break_count) > 0) && (
+          {visible.some(e => activeSessions[e.id] && Number(activeSessions[e.id].break_count) > 0) && (
             <div className="adash-side-block" style={{ marginTop: 16 }}>
               <div className="adash-side-label"><TrendingUp size={11} style={{ display: 'inline', marginRight: 4 }} />Break Usage</div>
               <div className="adash-qs">
-                {employees.filter(e => activeSessions[e.id] && Number(activeSessions[e.id].break_count) > 0).map(emp => (
+                {visible.filter(e => activeSessions[e.id] && Number(activeSessions[e.id].break_count) > 0).map(emp => (
                   <div key={emp.id} className="adash-qs-row">
                     <span className="adash-qs-label">{emp.full_name || emp.email}</span>
-                    <span className="adash-qs-value" style={{ color: '#3b82f6' }}>
-                      {Number(activeSessions[emp.id].break_count)}/2
-                    </span>
+                    <span className="adash-qs-value" style={{ color: '#3b82f6' }}>{Number(activeSessions[emp.id].break_count)}/2</span>
                   </div>
                 ))}
               </div>

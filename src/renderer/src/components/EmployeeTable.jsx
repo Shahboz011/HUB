@@ -205,7 +205,7 @@ function SummaryBar({ employees }) {
   )
 }
 
-export default function EmployeeTable({ departments }) {
+export default function EmployeeTable({ departments, managedDept }) {
   const [employees, setEmployees] = useState([])
   const [activeSessions, setActiveSessions] = useState({})
   const [activityMap, setActivityMap] = useState({}) // { [empId]: { is_idle, ts } }
@@ -302,11 +302,11 @@ export default function EmployeeTable({ departments }) {
     }, 800)
   }, [])
 
-  const deptOptions = ['All', ...departments]
+  const deptOptions = managedDept ? [managedDept] : ['All', ...departments]
   const filtered = employees.filter(emp => {
     const q = search.toLowerCase()
     const matchSearch = !search || emp.full_name?.toLowerCase().includes(q) || emp.email?.toLowerCase().includes(q)
-    const matchDept = filterDept === 'All' || emp.department === filterDept
+    const matchDept = managedDept ? emp.department === managedDept : (filterDept === 'All' || emp.department === filterDept)
     return matchSearch && matchDept
   })
 
