@@ -934,8 +934,8 @@ function EmployeeTransactions({ employeeId }) {
         {transactions.map(tx => (
           <div key={tx.id} className={`bf-row bf-row-${tx.type}`}>
             <span className="bf-row-date">
-              <span className="bf-row-day">{new Date(tx.created_at).toLocaleDateString('en-US', { weekday: 'short' })}</span>
-              <span className="bf-row-datenum">{new Date(tx.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</span>
+              <span className="bf-row-day">{new Date(tx.created_at).toLocaleDateString('en-US', { weekday: 'short', timeZone: 'America/New_York' })}</span>
+              <span className="bf-row-datenum">{new Date(tx.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'America/New_York' })}</span>
             </span>
             <span className={`bf-badge bf-badge-${tx.type}`}>{tx.type === 'bonus' ? '+ Bonus' : '− Fine'}</span>
             <span className="bf-row-note">{tx.note || <span style={{ color: 'var(--text-muted)' }}>—</span>}</span>

@@ -14,14 +14,20 @@ function deptColor(dept) {
   return DEPT_COLORS[Math.abs(hash) % DEPT_COLORS.length]
 }
 
+const NY = 'America/New_York'
+
 function fmt(v) {
   return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2 }).format(v)
 }
 function fmtTime(iso) {
-  return new Date(iso).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true })
+  return new Date(iso).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true, timeZone: NY })
 }
 function fmtMonthYear(iso) {
-  return new Date(iso).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
+  return new Date(iso).toLocaleDateString('en-US', { month: 'long', year: 'numeric', timeZone: NY })
+}
+function nyMonthYear(d) {
+  const parts = new Intl.DateTimeFormat('en-US', { timeZone: NY, year: 'numeric', month: 'numeric' }).formatToParts(d)
+  return { month: +parts.find(p => p.type === 'month').value, year: +parts.find(p => p.type === 'year').value }
 }
 
 function groupByMonth(sessions) {
@@ -100,10 +106,10 @@ export default function AttendanceView({ employee, onBack }) {
   const completed = sessions.filter(s => s.ended_at)
   const totalHours = completed.reduce((sum, s) => sum + (Number(s.duration_hours) || 0), 0)
 
-  const now = new Date()
+  const nowNY = nyMonthYear(new Date())
   const thisMonthSessions = completed.filter(s => {
-    const d = new Date(s.started_at)
-    return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear()
+    const p = nyMonthYear(new Date(s.started_at))
+    return p.month === nowNY.month && p.year === nowNY.year
   })
   const thisMonthHours = thisMonthSessions.reduce((sum, s) => sum + (Number(s.duration_hours) || 0), 0)
 
@@ -213,10 +219,10 @@ export default function AttendanceView({ employee, onBack }) {
                       <div key={s.id} className={`att-session-row ${isActive ? 'att-row-active' : ''} ${i % 2 === 1 ? 'att-row-odd' : ''}`}>
                         <div className="att-col-date">
                           <span className="att-weekday">
-                            {d.toLocaleDateString('en-US', { weekday: 'short' })}
+                            {d.toLocaleDateString('en-US', { weekday: 'short', timeZone: NY })}
                           </span>
                           <span className="att-datenum">
-                            {d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                            {d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: NY })}
                           </span>
                         </div>
                         <div className="att-col-in att-time">{fmtTime(s.started_at)}</div>
@@ -341,7 +347,7 @@ function ScreenshotsSection({ employeeId }) {
               <span className="ss-thumb-time">
                 {new Date(s.taken_at).toLocaleString('en-US', {
                   month: 'short', day: 'numeric',
-                  hour: '2-digit', minute: '2-digit',
+                  hour: '2-digit', minute: '2-digit', timeZone: NY,
                 })}
               </span>
               {(s.active_app || s.window_title) && (
@@ -362,7 +368,7 @@ function ScreenshotsSection({ employeeId }) {
             <div className="ss-full-meta">
               {new Date(expanded.taken_at).toLocaleString('en-US', {
                 weekday: 'long', month: 'long', day: 'numeric',
-                hour: '2-digit', minute: '2-digit',
+                hour: '2-digit', minute: '2-digit', timeZone: NY,
               })}
             </div>
             {(expanded.active_app || expanded.window_title) && (
@@ -563,8 +569,8 @@ function BonusFineSection({ employee }) {
                       onClick={() => { setExpandedTxId(isOpen ? null : tx.id); setSecPrompt(null); setConfirmWord('') }}
                     >
                       <span className="bf-row-date">
-                        <span className="bf-row-day">{d.toLocaleDateString('en-US', { weekday: 'short' })}</span>
-                        <span className="bf-row-datenum">{d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</span>
+                        <span className="bf-row-day">{d.toLocaleDateString('en-US', { weekday: 'short', timeZone: NY })}</span>
+                        <span className="bf-row-datenum">{d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: NY })}</span>
                       </span>
                       <span className={`bf-badge bf-badge-${tx.type}`}>{tx.type === 'bonus' ? '+ Bonus' : '− Fine'}</span>
                       <span className="bf-row-note">{tx.note || <span style={{ color: 'var(--text-muted)' }}>—</span>}</span>
@@ -587,9 +593,9 @@ function BonusFineSection({ employee }) {
                             {tx.type === 'bonus' ? 'Bonus' : 'Fine'}
                           </span>
                           <span className="bf-detail-date">
-                            {d.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
+                            {d.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric', timeZone: NY })}
                             {' · '}
-                            {d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
+                            {d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZone: NY })}
                           </span>
                         </div>
                         {editTxId === tx.id ? (

@@ -2,6 +2,8 @@ import { useState, useEffect } from 'react'
 import { Users, Wifi, Coffee, WifiOff, TrendingUp } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 
+const NY = 'America/New_York'
+
 const DEPT_COLORS = [
   '#6366f1','#8b5cf6','#ec4899','#f59e0b','#10b981',
   '#3b82f6','#14b8a6','#f97316','#ef4444','#06b6d4',
@@ -138,7 +140,7 @@ export default function AdminDashboard({ adminName }) {
   const offlineCount  = employees.filter(e => !activeSessions[e.id]).length
 
   const today = new Date().toLocaleDateString('en-US', {
-    weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'
+    weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', timeZone: NY,
   })
 
   // Sort: working → break types → idle → offline
