@@ -3,6 +3,7 @@ const { join } = require('path')
 const { autoUpdater } = require('electron-updater')
 const https = require('https')
 const crypto = require('crypto')
+const { execFile } = require('child_process')
 
 const SUPABASE_URL = 'oewfgyiuyeetsxebowaa.supabase.co'
 const SERVICE_KEY  = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9ld2ZneWl1eWVldHN4ZWJvd2FhIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3OTUzNTE3MywiZXhwIjoyMDk1MTExMTczfQ.rWCGISd8zfe-gkgVDBGaz5SCP0lVsiWhyZX4FgJ-c3A'
@@ -178,13 +179,54 @@ function blurBitmap(buffer, width, height) {
   return src // points to the last-written buffer after an even number of swaps
 }
 
+// ── Active window detection ──────────────────────────────────────────────────
+// Uses Win32 GetForegroundWindow + GetWindowText via PowerShell -EncodedCommand.
+// Runs concurrently with desktopCapturer.getSources; never blocks the blur pipeline.
+// Fails silently — returns empty strings so screenshots still upload on error.
+function getActiveWindow() {
+  return new Promise((resolve) => {
+    const ps = [
+      'Add-Type -TypeDefinition @"',
+      'using System;',
+      'using System.Runtime.InteropServices;',
+      'using System.Text;',
+      'public class Win32 {',
+      '  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();',
+      '  [DllImport("user32.dll")] public static extern int GetWindowText(IntPtr h, StringBuilder s, int n);',
+      '  [DllImport("user32.dll")] public static extern int GetWindowThreadProcessId(IntPtr h, out int pid);',
+      '}',
+      '"@',
+      '$h = [Win32]::GetForegroundWindow()',
+      '$sb = New-Object System.Text.StringBuilder 512',
+      '[Win32]::GetWindowText($h, $sb, 512) | Out-Null',
+      '$wpid = 0',
+      '[Win32]::GetWindowThreadProcessId($h, [ref]$wpid) | Out-Null',
+      '$p = Get-Process -Id $wpid -ErrorAction SilentlyContinue',
+      "$app = if ($p) { try { $n = $p.MainModule.FileVersionInfo.ProductName; if ($n) { $n } else { $p.ProcessName } } catch { $p.ProcessName } } else { '' }",
+      '[Console]::OutputEncoding = [Text.Encoding]::UTF8',
+      "Write-Output (ConvertTo-Json @{ title = $sb.ToString(); app = $app })",
+    ].join('\r\n')
+    const enc = Buffer.from(ps, 'utf16le').toString('base64')
+    execFile('powershell', ['-NoProfile', '-NonInteractive', '-EncodedCommand', enc],
+      { timeout: 5000, windowsHide: true },
+      (err, stdout) => {
+        if (err || !stdout) { resolve({ active_app: '', window_title: '' }); return }
+        try {
+          const parsed = JSON.parse(stdout.trim())
+          resolve({ active_app: (parsed.app || '').trim(), window_title: (parsed.title || '').trim() })
+        } catch { resolve({ active_app: '', window_title: '' }) }
+      }
+    )
+  })
+}
+
 // IPC: capture screen via desktopCapturer — multi-monitor aware, HIPAA-compliant blur
 ipcMain.handle('capture-screen', async () => {
   try {
-    const sources = await desktopCapturer.getSources({
-      types: ['screen'],
-      thumbnailSize: { width: 1280, height: 720 },
-    })
+    const [sources, activeWindow] = await Promise.all([
+      desktopCapturer.getSources({ types: ['screen'], thumbnailSize: { width: 1280, height: 720 } }),
+      getActiveWindow(),
+    ])
     if (!sources || sources.length === 0) return { ok: false, error: 'no_sources' }
 
     // Blur + encode each monitor sequentially with setImmediate yields so the
@@ -208,7 +250,7 @@ ipcMain.handle('capture-screen', async () => {
     }
 
     if (screens.length === 0) return { ok: false, error: 'empty_thumbnails' }
-    return { ok: true, screens }
+    return { ok: true, screens, active_app: activeWindow.active_app, window_title: activeWindow.window_title }
   } catch (e) {
     return { ok: false, error: e.message || 'unknown' }
   }

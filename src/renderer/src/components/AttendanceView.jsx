@@ -344,6 +344,12 @@ function ScreenshotsSection({ employeeId }) {
                   hour: '2-digit', minute: '2-digit',
                 })}
               </span>
+              {(s.active_app || s.window_title) && (
+                <div className="ss-window-info">
+                  {s.active_app && <span className="ss-app-name">{s.active_app}</span>}
+                  {s.window_title && <span className="ss-win-title">{s.window_title}</span>}
+                </div>
+              )}
             </div>
           ))}
         </div>
@@ -359,6 +365,12 @@ function ScreenshotsSection({ employeeId }) {
                 hour: '2-digit', minute: '2-digit',
               })}
             </div>
+            {(expanded.active_app || expanded.window_title) && (
+              <div className="ss-meta-window">
+                {expanded.active_app && <div className="ss-meta-app">{expanded.active_app}</div>}
+                {expanded.window_title && <div className="ss-meta-win">{expanded.window_title}</div>}
+              </div>
+            )}
             <button className="ss-close-btn" onClick={() => setExpanded(null)}>✕ Close</button>
           </div>
         </div>

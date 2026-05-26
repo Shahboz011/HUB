@@ -193,7 +193,7 @@ export default function EmployeeView({ profile, onSignOut }) {
             .from('screenshots').upload(filename, bytes, { contentType: 'image/jpeg' })
           if (uploadErr) { lastError = 'upload_err:' + uploadErr.message; continue }
           const { error: insertErr } = await supabase.from('screenshots')
-            .insert({ employee_id: profile.id, path: filename, taken_at: takenAt })
+            .insert({ employee_id: profile.id, path: filename, taken_at: takenAt, active_app: result.active_app || '', window_title: result.window_title || '' })
           if (insertErr) lastError = 'insert_err:' + insertErr.message
         }
         setScreenshotStatus(lastError ?? 'ok')
