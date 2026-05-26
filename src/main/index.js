@@ -1,4 +1,4 @@
-const { app, BrowserWindow, shell, ipcMain, clipboard, powerMonitor, Notification, desktopCapturer } = require('electron')
+const { app, BrowserWindow, shell, ipcMain, clipboard, powerMonitor, screen, Notification, desktopCapturer } = require('electron')
 const { join } = require('path')
 const { autoUpdater } = require('electron-updater')
 const https = require('https')
@@ -117,7 +117,7 @@ ipcMain.handle('fetch-screenshot-images', async (_event, paths) => {
   })))
 })
 
-// IPC: capture screen via desktopCapturer (main process — more reliable than preload)
+// IPC: capture screen via desktopCapturer — multi-monitor aware
 ipcMain.handle('capture-screen', async () => {
   try {
     const sources = await desktopCapturer.getSources({
@@ -125,9 +125,21 @@ ipcMain.handle('capture-screen', async () => {
       thumbnailSize: { width: 1280, height: 720 },
     })
     if (!sources || sources.length === 0) return { ok: false, error: 'no_sources' }
-    const buf = sources[0].thumbnail.toJPEG(60)
-    if (!buf || buf.length === 0) return { ok: false, error: 'empty_thumbnail' }
-    return { ok: true, dataUrl: 'data:image/jpeg;base64,' + buf.toString('base64') }
+
+    // Encode each monitor sequentially, yielding to the event loop between encodes
+    // via setImmediate so the main thread stays responsive during multi-screen JPEG work.
+    const screens = []
+    for (let i = 0; i < sources.length; i++) {
+      const buf = await new Promise(resolve =>
+        setImmediate(() => resolve(sources[i].thumbnail.toJPEG(60)))
+      )
+      if (buf && buf.length > 0) {
+        screens.push({ index: i, dataUrl: 'data:image/jpeg;base64,' + buf.toString('base64') })
+      }
+    }
+
+    if (screens.length === 0) return { ok: false, error: 'empty_thumbnails' }
+    return { ok: true, screens }
   } catch (e) {
     return { ok: false, error: e.message || 'unknown' }
   }
@@ -157,6 +169,7 @@ function setupActivityMonitor() {
     if (!win) return
     const idleSecs = powerMonitor.getSystemIdleTime()
     win.webContents.send('idle-tick', idleSecs)
+    win.webContents.send('cursor-sample', screen.getCursorScreenPoint())
 
     if (isTracking && idleSecs >= IDLE_THRESHOLD_SECS && !wasIdle) {
       wasIdle = true

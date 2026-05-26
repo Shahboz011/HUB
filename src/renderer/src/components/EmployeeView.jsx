@@ -32,6 +32,11 @@ export default function EmployeeView({ profile, onSignOut }) {
   const totalIdleRef = useRef(0)  // accumulated idle seconds this session
   const idleStartAtRef = useRef(null) // mirror of idleStartAt for use in async callbacks
   const activityBcRef = useRef(null) // supabase broadcast channel
+  const justRestoredRef = useRef(false) // true only during the first effect fire after a session restore
+  const cursorSamplesRef = useRef([])   // [{x, y, t}] — rolling 2-min window of global cursor positions
+  const suspicionFiredRef = useRef(false)
+  const lastIdleSecsRef = useRef(0)     // most recent powerMonitor reading
+  const trackingStateRef = useRef({ isIdle: false, sessionId: null, employeeId: null })
 
   useEffect(() => {
     window.electronAPI?.getVersion?.().then(v => { if (v) setAppVersion(v) })
@@ -46,9 +51,11 @@ export default function EmployeeView({ profile, onSignOut }) {
     ]).then(([{ data: p }, { data: s }]) => {
       if (p) setFresh(p)
       if (s) {
+        justRestoredRef.current = true
+        totalIdleRef.current = Number(s.accumulated_idle_secs) || 0
         setActiveSession(s)
         setElapsed(Math.floor((Date.now() - new Date(s.started_at).getTime()) / 1000))
-        window.electronAPI?.setTracking?.(true) // restore tracking for existing session
+        window.electronAPI?.setTracking?.(true)
       }
       setLoading(false)
     })
@@ -98,6 +105,71 @@ export default function EmployeeView({ profile, onSignOut }) {
     })
   }, [])
 
+  // Keep trackingStateRef current so the [] cursor listener can read live values without stale closures
+  useEffect(() => {
+    trackingStateRef.current = {
+      isIdle,
+      sessionId: activeSession?.id ?? null,
+      employeeId: fresh?.id ?? null,
+    }
+  }, [isIdle, activeSession?.id, fresh?.id])
+
+  // Macro / virtual-clicker detection — cross-check powerMonitor against global cursor variance
+  useEffect(() => {
+    if (!window.electronAPI) return
+
+    const VARIANCE_THRESHOLD = 9    // px² — within a ~3px radius; any natural hand movement exceeds this
+    const WINDOW_MS = 2 * 60 * 1000 // rolling 2-minute sample window
+    const MIN_SAMPLES = 12           // 12 × 10 s = 2 min of data required before judging
+    const OS_IDLE_SECS = 60          // mirrors IDLE_THRESHOLD_SECS in main/index.js
+
+    // Track the latest powerMonitor reading so we can cross-check inside the cursor handler
+    window.electronAPI.onIdleTick?.((secs) => {
+      lastIdleSecsRef.current = secs
+    })
+
+    window.electronAPI.onCursorSample?.(({ x, y }) => {
+      const now = Date.now()
+      cursorSamplesRef.current.push({ x, y, t: now })
+      cursorSamplesRef.current = cursorSamplesRef.current.filter(s => now - s.t <= WINDOW_MS)
+
+      const { isIdle, sessionId, employeeId } = trackingStateRef.current
+
+      // While already idle (any cause) reset the flag so detection can re-arm after they resume
+      if (!sessionId || isIdle) { suspicionFiredRef.current = false; return }
+
+      // If powerMonitor itself already considers the user idle, no need to double-flag
+      if (lastIdleSecsRef.current >= OS_IDLE_SECS) return
+
+      const samples = cursorSamplesRef.current
+      if (samples.length < MIN_SAMPLES) return
+
+      // Compute combined x+y population variance over the window
+      const xMean = samples.reduce((s, p) => s + p.x, 0) / samples.length
+      const yMean = samples.reduce((s, p) => s + p.y, 0) / samples.length
+      const variance =
+        samples.reduce((s, p) => s + (p.x - xMean) ** 2 + (p.y - yMean) ** 2, 0) / samples.length
+
+      if (variance < VARIANCE_THRESHOLD && !suspicionFiredRef.current) {
+        suspicionFiredRef.current = true
+        // Force the session into idle — the existing idle persist effect handles the DB write
+        const startAt = Date.now()
+        idleStartAtRef.current = startAt
+        setIdleStartAt(startAt)
+        setIsIdle(true)
+        // Log the flag for admin review
+        supabase.from('activity_suspicions').insert({
+          employee_id: employeeId,
+          session_id: sessionId,
+          reason: 'low_mouse_variance',
+          details: { variance: Math.round(variance * 100) / 100, sample_count: samples.length },
+        }).then(() => {})
+      } else if (variance >= VARIANCE_THRESHOLD) {
+        suspicionFiredRef.current = false
+      }
+    })
+  }, [])
+
   // Screenshot capture — every 5 minutes while clocked in
   useEffect(() => {
     if (!activeSession || !window.electronAPI?.captureScreen) return
@@ -108,20 +180,23 @@ export default function EmployeeView({ profile, onSignOut }) {
           setScreenshotStatus('capture_err:' + (result?.error || 'null_result'))
           return
         }
-        const base64 = result.dataUrl.split(',')[1]
-        const bytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0))
-        const filename = `${profile.id}/${Date.now()}.jpg`
-        const { error: uploadErr } = await supabase.storage.from('screenshots').upload(filename, bytes, { contentType: 'image/jpeg' })
-        if (uploadErr) {
-          setScreenshotStatus('upload_err:' + uploadErr.message)
-          return
+        // All screens in this batch share the same taken_at so the admin can
+        // correlate which captures belong to the same 5-minute milestone.
+        const takenAt = new Date().toISOString()
+        const ts = Date.now()
+        let lastError = null
+        for (const { index, dataUrl } of result.screens) {
+          const base64 = dataUrl.split(',')[1]
+          const bytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0))
+          const filename = `${profile.id}/${ts}_screen${index}.jpg`
+          const { error: uploadErr } = await supabase.storage
+            .from('screenshots').upload(filename, bytes, { contentType: 'image/jpeg' })
+          if (uploadErr) { lastError = 'upload_err:' + uploadErr.message; continue }
+          const { error: insertErr } = await supabase.from('screenshots')
+            .insert({ employee_id: profile.id, path: filename, taken_at: takenAt })
+          if (insertErr) lastError = 'insert_err:' + insertErr.message
         }
-        const { error: insertErr } = await supabase.from('screenshots').insert({ employee_id: profile.id, path: filename, taken_at: new Date().toISOString() })
-        if (insertErr) {
-          setScreenshotStatus('insert_err:' + insertErr.message)
-          return
-        }
-        setScreenshotStatus('ok')
+        setScreenshotStatus(lastError ?? 'ok')
       } catch (e) {
         setScreenshotStatus('exception:' + (e?.message || 'unknown'))
       }
@@ -155,15 +230,19 @@ export default function EmployeeView({ profile, onSignOut }) {
   // Persist idle state to DB so admin dashboard survives refresh
   useEffect(() => {
     if (!activeSession?.id) return
+    // When a session is restored on mount the DB already holds the correct state —
+    // skip this one fire to avoid overwriting it with zeroed-out local values.
+    if (justRestoredRef.current) {
+      justRestoredRef.current = false
+      return
+    }
     if (isIdle) {
-      // idleStartAt state is set in the same batch as isIdle — use it directly
       const startIso = idleStartAt ? new Date(idleStartAt).toISOString() : new Date().toISOString()
       supabase.from('work_sessions')
         .update({ is_idle: true, idle_started_at: startIso })
         .eq('id', activeSession.id)
         .then(() => {})
     } else {
-      // totalIdleRef.current was already incremented before setIsIdle(false) in every code path
       supabase.from('work_sessions')
         .update({ is_idle: false, idle_started_at: null, accumulated_idle_secs: totalIdleRef.current })
         .eq('id', activeSession.id)
@@ -189,24 +268,17 @@ export default function EmployeeView({ profile, onSignOut }) {
   async function clockOut() {
     setClocking(true)
     window.electronAPI?.setTracking?.(false)
-    const now = new Date()
-    // Finalize any in-progress idle period
-    if (idleStartAtRef.current !== null) {
-      totalIdleRef.current += (Date.now() - idleStartAtRef.current) / 1000
-      idleStartAtRef.current = null
-    }
-    const totalElapsedSecs = (now - new Date(activeSession.started_at)) / 1000
-    const activeSecs = Math.max(0, totalElapsedSecs - totalIdleRef.current)
-    const durationHours = activeSecs / 3600
-    await supabase.from('work_sessions').update({
-      ended_at: now.toISOString(), duration_hours: durationHours,
-    }).eq('id', activeSession.id)
-    const newTotal = Number(fresh.hours_worked) + durationHours
-    await supabase.from('profiles').update({ hours_worked: newTotal }).eq('id', fresh.id)
-    setFresh(p => ({ ...p, hours_worked: newTotal }))
+    // The RPC sets ended_at = now() server-side, reads accumulated_idle_secs +
+    // any in-progress idle_started_at from the DB, and updates hours_worked atomically.
+    // No client clock is involved in the duration calculation.
+    const { data: durationHours } = await supabase.rpc('clock_out_session', {
+      p_session_id: activeSession.id,
+    })
+    setFresh(p => ({ ...p, hours_worked: Number(p.hours_worked) + (Number(durationHours) || 0) }))
     setActiveSession(null)
     setElapsed(0)
     totalIdleRef.current = 0
+    idleStartAtRef.current = null
     setIdleStartAt(null)
     setIsIdle(false)
     setClocking(false)

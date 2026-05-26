@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   installUpdate: () => ipcRenderer.invoke('install-update'),
   setTracking: (val) => ipcRenderer.invoke('set-tracking', val),
   onIdleTick: (cb) => ipcRenderer.on('idle-tick', (_e, secs) => cb(secs)),
+  onCursorSample: (cb) => ipcRenderer.on('cursor-sample', (_e, pos) => cb(pos)),
   onUserIdle: (cb) => ipcRenderer.on('user-idle', (_e, secs) => cb(secs)),
   onUserActive: (cb) => ipcRenderer.on('user-active', () => cb()),
   getVersion: () => ipcRenderer.invoke('get-version'),

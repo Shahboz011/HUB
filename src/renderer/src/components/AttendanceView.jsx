@@ -548,7 +548,7 @@ function BonusFineSection({ employee }) {
                     {/* Collapsed row — click anywhere to expand */}
                     <div
                       className="bf-row-summary"
-                      onClick={() => { setExpandedTxId(isOpen ? null : tx.id); setConfirmDeleteTxId(null) }}
+                      onClick={() => { setExpandedTxId(isOpen ? null : tx.id); setSecPrompt(null); setConfirmWord('') }}
                     >
                       <span className="bf-row-date">
                         <span className="bf-row-day">{d.toLocaleDateString('en-US', { weekday: 'short' })}</span>
