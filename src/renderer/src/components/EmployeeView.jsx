@@ -152,6 +152,25 @@ export default function EmployeeView({ profile, onSignOut }) {
       payload: { employee_id: fresh.id, is_idle: isIdle, ts: Date.now() } }).catch(() => {})
   }, [isIdle, activeSession?.id, fresh.id])
 
+  // Persist idle state to DB so admin dashboard survives refresh
+  useEffect(() => {
+    if (!activeSession?.id) return
+    if (isIdle) {
+      // idleStartAt state is set in the same batch as isIdle — use it directly
+      const startIso = idleStartAt ? new Date(idleStartAt).toISOString() : new Date().toISOString()
+      supabase.from('work_sessions')
+        .update({ is_idle: true, idle_started_at: startIso })
+        .eq('id', activeSession.id)
+        .then(() => {})
+    } else {
+      // totalIdleRef.current was already incremented before setIsIdle(false) in every code path
+      supabase.from('work_sessions')
+        .update({ is_idle: false, idle_started_at: null, accumulated_idle_secs: totalIdleRef.current })
+        .eq('id', activeSession.id)
+        .then(() => {})
+    }
+  }, [isIdle, activeSession?.id])
+
   async function clockIn() {
     if (activeSession) return // guard against double-tap
     totalIdleRef.current = 0

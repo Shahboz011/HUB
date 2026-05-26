@@ -53,9 +53,18 @@ function TableRow({ index, style, data }) {
   const salary = calcSalary(emp.hours_worked, emp.hourly_rate, emp.bonuses, emp.fines)
   const session = activeSessions[emp.id]
   const rate = Number(emp.hourly_rate) || 0
-  const sessionEarned = session ? ((Date.now() - new Date(session.started_at).getTime()) / 3600000) * rate : 0
+  let sessionEarned = 0
+  if (session) {
+    const wallSecs = (Date.now() - new Date(session.started_at).getTime()) / 1000
+    const committedIdle = Number(session.accumulated_idle_secs) || 0
+    const currentIdleContrib = session.is_idle && session.idle_started_at
+      ? (Date.now() - new Date(session.idle_started_at).getTime()) / 1000 : 0
+    const activeSecs = Math.max(0, wallSecs - committedIdle - currentIdleContrib)
+    sessionEarned = (activeSecs / 3600) * rate
+  }
   const actStatus = activityMap?.[emp.id]
-  const empIsIdle = session && actStatus?.is_idle === true
+  // DB field is authoritative after refresh; broadcast fills the gap before first DB write
+  const empIsIdle = session && (session.is_idle === true || actStatus?.is_idle === true)
 
   return (
     <div style={style} className={`table-row ${isEven ? 'row-even' : 'row-odd'}`}>
@@ -244,6 +253,8 @@ export default function EmployeeTable({ departments }) {
         ({ new: row }) => {
           if (row.ended_at) {
             setActiveSessions(prev => { const next = { ...prev }; delete next[row.employee_id]; return next })
+          } else {
+            setActiveSessions(prev => ({ ...prev, [row.employee_id]: row }))
           }
         })
       .subscribe()

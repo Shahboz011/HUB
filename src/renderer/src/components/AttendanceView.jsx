@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { ArrowLeft, ClipboardList, Clock, CalendarDays, DollarSign, PiggyBank, Camera, RefreshCw, XCircle, Trash2 } from 'lucide-react'
+import { ArrowLeft, ClipboardList, Clock, CalendarDays, DollarSign, PiggyBank, Camera, RefreshCw, XCircle, Trash2, ChevronDown } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 
 const DEPT_COLORS = [
@@ -272,6 +272,7 @@ function ScreenshotsSection({ employeeId }) {
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [expanded, setExpanded] = useState(null)
+  const [isOpen, setIsOpen] = useState(false)
 
   const load = useCallback(async (isRefresh = false) => {
     if (isRefresh) setRefreshing(true)
@@ -303,8 +304,12 @@ function ScreenshotsSection({ employeeId }) {
 
   return (
     <div className="bf-wrap">
-      <div className="bf-header">
+      <div
+        className={`bf-header sr-dept-header-clickable ${isOpen ? 'sr-dept-header-open' : ''}`}
+        onClick={() => setIsOpen(o => !o)}
+      >
         <h3 className="bf-title" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <ChevronDown size={14} className={`sr-dept-chevron ${isOpen ? 'sr-dept-chevron-open' : ''}`} />
           <Camera size={15} />
           Screenshots
           {!loading && screenshots.length > 0 && (
@@ -314,7 +319,7 @@ function ScreenshotsSection({ employeeId }) {
           )}
         </h3>
         <button
-          onClick={() => load(true)}
+          onClick={e => { e.stopPropagation(); load(true) }}
           disabled={loading || refreshing}
           style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, color: 'var(--text-muted)', background: 'none', border: 'none', cursor: (loading || refreshing) ? 'default' : 'pointer', padding: '2px 6px' }}
           title="Refresh screenshots"
@@ -324,7 +329,7 @@ function ScreenshotsSection({ employeeId }) {
         </button>
       </div>
 
-      {loading ? (
+      {isOpen && (loading ? (
         <p className="bf-empty">Loading…</p>
       ) : screenshots.length === 0 ? (
         <p className="bf-empty">No screenshots yet — taken every 5 min while clocked in. Requires app v1.6.0+.</p>
@@ -342,7 +347,7 @@ function ScreenshotsSection({ employeeId }) {
             </div>
           ))}
         </div>
-      )}
+      ))}
 
       {expanded && (
         <div className="ss-overlay" onClick={() => setExpanded(null)}>
@@ -370,7 +375,22 @@ function BonusFineSection({ employee }) {
   const [note, setNote] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
-  const [confirmDeleteTxId, setConfirmDeleteTxId] = useState(null)
+  const [expandedTxId, setExpandedTxId] = useState(null)
+  const [showAll, setShowAll] = useState(false)
+  const [editTxId, setEditTxId] = useState(null)
+  const [editAmount, setEditAmount] = useState('')
+  const [editNote, setEditNote] = useState('')
+  const [secPrompt, setSecPrompt] = useState(null) // { action: 'delete'|'edit', tx }
+  const [confirmWord, setConfirmWord] = useState('')
+
+  useEffect(() => {
+    if (!expandedTxId) return
+    const timer = setTimeout(() => {
+      const el = document.querySelector('.bf-row-expanded')
+      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+    }, 80)
+    return () => clearTimeout(timer)
+  }, [expandedTxId])
   const [localTotals, setLocalTotals] = useState({ bonuses: Number(employee.bonuses) || 0, fines: Number(employee.fines) || 0 })
 
   useEffect(() => {
@@ -404,11 +424,56 @@ function BonusFineSection({ employee }) {
     await supabase.from('transactions').delete().eq('id', tx.id)
     const field = tx.type === 'bonus' ? 'bonuses' : 'fines'
     const newTotal = Math.max(0, localTotals[field] - tx.amount)
-    const next = { ...localTotals, [field]: newTotal }
-    setLocalTotals(next)
+    setLocalTotals(prev => ({ ...prev, [field]: newTotal }))
     await supabase.from('profiles').update({ [field]: newTotal }).eq('id', employee.id)
     setTransactions(prev => prev.filter(t => t.id !== tx.id))
-    setConfirmDeleteTxId(null)
+  }
+
+  function initiateDelete(tx) {
+    setSecPrompt({ action: 'delete', tx })
+    setConfirmWord('')
+    setEditTxId(null)
+  }
+
+  function initiateEdit(tx) {
+    setEditTxId(tx.id)
+    setEditAmount(String(tx.amount))
+    setEditNote(tx.note || '')
+    setSecPrompt(null)
+    setConfirmWord('')
+  }
+
+  function initiateEditSave(tx) {
+    setSecPrompt({ action: 'edit', tx })
+    setConfirmWord('')
+  }
+
+  function cancelSec() {
+    setSecPrompt(null)
+    setConfirmWord('')
+    setEditTxId(null)
+  }
+
+  async function commitAction() {
+    if (confirmWord !== 'CONFIRM') return
+    const { action, tx } = secPrompt
+    if (action === 'delete') {
+      await deleteTransaction(tx)
+      setExpandedTxId(null)
+    } else {
+      const amt = Number(editAmount)
+      if (!amt || amt <= 0) return
+      const field = tx.type === 'bonus' ? 'bonuses' : 'fines'
+      const diff = amt - tx.amount
+      await supabase.from('transactions').update({ amount: amt, note: editNote.trim() }).eq('id', tx.id)
+      const newTotal = Math.max(0, localTotals[field] + diff)
+      setLocalTotals(prev => ({ ...prev, [field]: newTotal }))
+      await supabase.from('profiles').update({ [field]: newTotal }).eq('id', employee.id)
+      setTransactions(prev => prev.map(t => t.id === tx.id ? { ...t, amount: amt, note: editNote.trim() } : t))
+      setEditTxId(null)
+    }
+    setSecPrompt(null)
+    setConfirmWord('')
   }
 
   const totalBonus = localTotals.bonuses
@@ -417,7 +482,14 @@ function BonusFineSection({ employee }) {
   return (
     <div className="bf-wrap">
       <div className="bf-header">
-        <h3 className="bf-title">Bonuses &amp; Fines</h3>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <h3 className="bf-title">Bonuses &amp; Fines</h3>
+          {transactions.length > 0 && (
+            <span style={{ fontSize: 12, color: 'var(--text-muted)', fontWeight: 400 }}>
+              {transactions.length} {transactions.length === 1 ? 'entry' : 'entries'}
+            </span>
+          )}
+        </div>
         <div className="bf-totals">
           <span className="bf-total-bonus">+{fmt(totalBonus)} bonuses</span>
           <span className="bf-total-fine">−{fmt(totalFine)} fines</span>
@@ -465,35 +537,102 @@ function BonusFineSection({ employee }) {
             <span className="bf-lh-type">Type</span>
             <span className="bf-lh-note">Reason</span>
             <span className="bf-lh-amt">Amount</span>
-            <span style={{ width: 60 }} />
+            <span style={{ width: 36 }} />
           </div>
-          {transactions.map(tx => (
-            <div key={tx.id} className={`bf-row bf-row-${tx.type}`}>
-              <span className="bf-row-date">
-                <span className="bf-row-day">{new Date(tx.created_at).toLocaleDateString('en-US', { weekday: 'short' })}</span>
-                <span className="bf-row-datenum">{new Date(tx.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</span>
-              </span>
-              <span className={`bf-badge bf-badge-${tx.type}`}>{tx.type === 'bonus' ? '+ Bonus' : '− Fine'}</span>
-              <span className="bf-row-note">{tx.note || <span style={{ color: 'var(--text-muted)' }}>—</span>}</span>
-              <span className={`bf-row-amt bf-amt-${tx.type}`}>
-                {tx.type === 'bonus' ? '+' : '−'}{fmt(tx.amount)}
-              </span>
-              <span style={{ width: 60, display: 'flex', justifyContent: 'flex-end' }}>
-                {confirmDeleteTxId === tx.id ? (
-                  <span style={{ display: 'flex', gap: 4 }}>
-                    <button className="dept-remove-btn dept-delete-confirm-btn" style={{ fontSize: 10, padding: '2px 6px' }} onClick={() => deleteTransaction(tx)}>Remove?</button>
-                    <button className="dept-remove-btn" style={{ fontSize: 10, padding: '2px 6px' }} onClick={() => setConfirmDeleteTxId(null)}>No</button>
-                  </span>
-                ) : (
-                  <button className="dept-remove-btn dept-delete-icon-btn" style={{ opacity: 0.5 }} onClick={() => setConfirmDeleteTxId(tx.id)} title="Delete this entry">
-                    <Trash2 size={12} />
-                  </button>
-                )}
-              </span>
+          <div className="bf-list-scroll" style={{ maxHeight: showAll ? 'none' : '220px', overflow: showAll ? 'visible' : 'hidden' }}>
+              {transactions.map(tx => {
+                const isOpen = expandedTxId === tx.id
+                const d = new Date(tx.created_at)
+                return (
+                  <div key={tx.id} className={`bf-row bf-row-${tx.type} ${isOpen ? 'bf-row-expanded' : ''}`}>
+                    {/* Collapsed row — click anywhere to expand */}
+                    <div
+                      className="bf-row-summary"
+                      onClick={() => { setExpandedTxId(isOpen ? null : tx.id); setConfirmDeleteTxId(null) }}
+                    >
+                      <span className="bf-row-date">
+                        <span className="bf-row-day">{d.toLocaleDateString('en-US', { weekday: 'short' })}</span>
+                        <span className="bf-row-datenum">{d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</span>
+                      </span>
+                      <span className={`bf-badge bf-badge-${tx.type}`}>{tx.type === 'bonus' ? '+ Bonus' : '− Fine'}</span>
+                      <span className="bf-row-note">{tx.note || <span style={{ color: 'var(--text-muted)' }}>—</span>}</span>
+                      <span className={`bf-row-amt bf-amt-${tx.type}`}>
+                        {tx.type === 'bonus' ? '+' : '−'}{fmt(tx.amount)}
+                      </span>
+                      <span style={{ width: 36, display: 'flex', justifyContent: 'flex-end', flexShrink: 0 }}>
+                        <ChevronDown size={14} style={{ color: 'var(--text-muted)', transform: isOpen ? 'rotate(180deg)' : 'none', transition: 'transform .2s' }} />
+                      </span>
+                    </div>
+
+                    {/* Expanded detail card */}
+                    {isOpen && (
+                      <div className="bf-row-detail">
+                        <div className="bf-detail-amount" style={{ color: tx.type === 'bonus' ? 'var(--positive)' : 'var(--negative)' }}>
+                          {tx.type === 'bonus' ? '+' : '−'}{fmt(tx.amount)}
+                        </div>
+                        <div className="bf-detail-meta">
+                          <span className={`bf-badge bf-badge-${tx.type}`} style={{ fontSize: 12, padding: '3px 10px' }}>
+                            {tx.type === 'bonus' ? 'Bonus' : 'Fine'}
+                          </span>
+                          <span className="bf-detail-date">
+                            {d.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
+                            {' · '}
+                            {d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
+                          </span>
+                        </div>
+                        {editTxId === tx.id ? (
+                          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 4 }}>
+                            <div className="bf-amount-wrap" style={{ minWidth: 'unset' }}>
+                              <span className="bf-dollar">$</span>
+                              <input type="number" min="0.01" step="0.01" value={editAmount} onChange={e => setEditAmount(e.target.value)} className="bf-amount-input" style={{ width: 70 }} />
+                            </div>
+                            <input type="text" value={editNote} onChange={e => setEditNote(e.target.value)} placeholder="Reason" className="bf-note-input" style={{ flex: 1, minWidth: 140 }} />
+                            <button className={`bf-add-btn bf-add-${tx.type}`} style={{ padding: '5px 14px', fontSize: 12 }} onClick={() => initiateEditSave(tx)} disabled={!editAmount || Number(editAmount) <= 0}>Save</button>
+                            <button className="dept-remove-btn" style={{ fontSize: 12, padding: '5px 10px' }} onClick={cancelSec}>Cancel</button>
+                          </div>
+                        ) : (
+                          <>
+                            {tx.note && <div className="bf-detail-note">"{tx.note}"</div>}
+                            <div className="bf-detail-actions" style={{ display: 'flex', gap: 6 }}>
+                              <button className="dept-remove-btn" style={{ fontSize: 12, padding: '5px 12px' }} onClick={() => initiateEdit(tx)}>Edit entry</button>
+                              <button className="dept-remove-btn dept-delete-icon-btn" style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, padding: '5px 12px' }} onClick={() => initiateDelete(tx)}>
+                                <Trash2 size={13} />
+                                Delete entry
+                              </button>
+                            </div>
+                          </>
+                        )}
+                        {secPrompt?.tx.id === tx.id && (
+                          <div className="bf-sec-prompt">
+                            <p className="bf-sec-label">
+                              {secPrompt.action === 'delete' ? 'Permanently delete this entry?' : 'Save changes to this entry?'}
+                              {' '}Type <code className="bf-sec-code">CONFIRM</code> to proceed.
+                            </p>
+                            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                              <input
+                                type="text" value={confirmWord} autoFocus
+                                onChange={e => setConfirmWord(e.target.value.toUpperCase())}
+                                onKeyDown={e => e.key === 'Enter' && commitAction()}
+                                placeholder="CONFIRM" className="bf-confirm-input"
+                              />
+                              <button className="dept-remove-btn dept-delete-confirm-btn" style={{ fontSize: 12, padding: '6px 14px', opacity: confirmWord === 'CONFIRM' ? 1 : 0.4 }} onClick={commitAction} disabled={confirmWord !== 'CONFIRM'}>Proceed</button>
+                              <button className="dept-remove-btn" style={{ fontSize: 12, padding: '6px 14px' }} onClick={cancelSec}>Cancel</button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
             </div>
-          ))}
-        </div>
-      )}
+            {transactions.length > 3 && (
+              <button className="bf-show-more" onClick={() => setShowAll(a => !a)}>
+                {showAll ? 'Show Less' : `View All ${transactions.length} entries`}
+              </button>
+            )}
+          </div>
+        )}
     </div>
   )
 }

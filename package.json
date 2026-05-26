@@ -1,6 +1,6 @@
 {
   "name": "salary-command-center",
-  "version": "1.8.0",
+  "version": "1.9.0",
   "description": "Salary Command Center — professional payroll dashboard",
   "author": "Shahboz Nurullaev",
   "main": "out/main/index.js",
