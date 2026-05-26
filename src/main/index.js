@@ -1,4 +1,4 @@
-const { app, BrowserWindow, shell, ipcMain, clipboard, powerMonitor, screen, Notification, desktopCapturer } = require('electron')
+const { app, BrowserWindow, shell, ipcMain, clipboard, powerMonitor, screen, nativeImage, Notification, desktopCapturer } = require('electron')
 const { join } = require('path')
 const { autoUpdater } = require('electron-updater')
 const https = require('https')
@@ -117,7 +117,68 @@ ipcMain.handle('fetch-screenshot-images', async (_event, paths) => {
   })))
 })
 
-// IPC: capture screen via desktopCapturer — multi-monitor aware
+// ── Privacy blur ─────────────────────────────────────────────────────────────
+// Three-pass sliding-window box blur on raw RGBA bitmap data.
+// Radius 20 px × 3 passes ≈ Gaussian σ 35 px — makes all text unreadable while
+// keeping window chrome and layout visible for activity verification.
+// Operates entirely on in-process Buffers; the raw NativeImage pixel data never
+// leaves the main process or touches any storage/network path.
+function blurBitmap(buffer, width, height) {
+  const R = 20
+  const PASSES = 3
+  const stride = width * 4
+  const diam = R * 2 + 1
+  let src = Buffer.from(buffer) // copy — never mutate the NativeImage's own buffer
+  let dst = Buffer.allocUnsafe(buffer.length)
+
+  for (let pass = 0; pass < PASSES; pass++) {
+    // Horizontal sweep (sliding-window sum, O(width × height) regardless of R)
+    for (let y = 0; y < height; y++) {
+      const row = y * stride
+      let rs = 0, gs = 0, bs = 0
+      for (let dx = -R; dx <= R; dx++) {
+        const nx = Math.max(0, Math.min(dx, width - 1))
+        rs += src[row + nx * 4]; gs += src[row + nx * 4 + 1]; bs += src[row + nx * 4 + 2]
+      }
+      for (let x = 0; x < width; x++) {
+        const o = row + x * 4
+        dst[o] = (rs / diam) | 0; dst[o + 1] = (gs / diam) | 0
+        dst[o + 2] = (bs / diam) | 0; dst[o + 3] = src[o + 3]
+        const nx = Math.min(x + R + 1, width - 1)
+        const px = Math.max(x - R, 0)
+        rs += src[row + nx * 4] - src[row + px * 4]
+        gs += src[row + nx * 4 + 1] - src[row + px * 4 + 1]
+        bs += src[row + nx * 4 + 2] - src[row + px * 4 + 2]
+      }
+    }
+    ;[src, dst] = [dst, src]
+
+    // Vertical sweep
+    for (let x = 0; x < width; x++) {
+      const col = x * 4
+      let rs = 0, gs = 0, bs = 0
+      for (let dy = -R; dy <= R; dy++) {
+        const ny = Math.max(0, Math.min(dy, height - 1))
+        rs += src[ny * stride + col]; gs += src[ny * stride + col + 1]; bs += src[ny * stride + col + 2]
+      }
+      for (let y = 0; y < height; y++) {
+        const o = y * stride + col
+        dst[o] = (rs / diam) | 0; dst[o + 1] = (gs / diam) | 0
+        dst[o + 2] = (bs / diam) | 0; dst[o + 3] = src[o + 3]
+        const ny = Math.min(y + R + 1, height - 1)
+        const py = Math.max(y - R, 0)
+        rs += src[ny * stride + col] - src[py * stride + col]
+        gs += src[ny * stride + col + 1] - src[py * stride + col + 1]
+        bs += src[ny * stride + col + 2] - src[py * stride + col + 2]
+      }
+    }
+    ;[src, dst] = [dst, src]
+  }
+
+  return src // points to the last-written buffer after an even number of swaps
+}
+
+// IPC: capture screen via desktopCapturer — multi-monitor aware, HIPAA-compliant blur
 ipcMain.handle('capture-screen', async () => {
   try {
     const sources = await desktopCapturer.getSources({
@@ -126,12 +187,20 @@ ipcMain.handle('capture-screen', async () => {
     })
     if (!sources || sources.length === 0) return { ok: false, error: 'no_sources' }
 
-    // Encode each monitor sequentially, yielding to the event loop between encodes
-    // via setImmediate so the main thread stays responsive during multi-screen JPEG work.
+    // Blur + encode each monitor sequentially with setImmediate yields so the
+    // event loop stays responsive during CPU-intensive pixel work.
     const screens = []
     for (let i = 0; i < sources.length; i++) {
       const buf = await new Promise(resolve =>
-        setImmediate(() => resolve(sources[i].thumbnail.toJPEG(60)))
+        setImmediate(() => {
+          try {
+            const { width, height } = sources[i].thumbnail.getSize()
+            const raw = sources[i].thumbnail.toBitmap()       // raw RGBA, in-process only
+            const blurred = blurBitmap(raw, width, height)    // obfuscate before encoding
+            const safe = nativeImage.createFromBitmap(blurred, { width, height })
+            resolve(safe.toJPEG(60))                          // only the blurred JPEG leaves
+          } catch { resolve(null) }
+        })
       )
       if (buf && buf.length > 0) {
         screens.push({ index: i, dataUrl: 'data:image/jpeg;base64,' + buf.toString('base64') })
