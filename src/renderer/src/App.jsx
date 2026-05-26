@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { supabase } from './lib/supabase'
-import { Monitor, Users, Settings2, BarChart3, LogOut, Download, X, RotateCcw, LayoutDashboard } from 'lucide-react'
+import { Monitor, Users, Settings2, BarChart3, LogOut, Download, X, RotateCcw, LayoutDashboard, UserCheck } from 'lucide-react'
 import AuthScreen from './components/AuthScreen'
 import EmployeeTable from './components/EmployeeTable'
 import AdminPanel from './components/AdminPanel'
@@ -8,9 +8,11 @@ import EmployeeView from './components/EmployeeView'
 import SalaryReport from './components/SalaryReport'
 import CompleteProfile from './components/CompleteProfile'
 import AdminDashboard from './components/AdminDashboard'
+import MyTeam from './components/MyTeam'
 
 const ADMIN_NAV = [
   { id: 'dashboard', label: 'Dashboard',    icon: <LayoutDashboard size={15} /> },
+  { id: 'myteam',    label: 'My Team',      icon: <UserCheck size={15} /> },
   { id: 'employees', label: 'Employees',    icon: <Users size={15} /> },
   { id: 'admin',     label: 'Admin Panel',  icon: <Settings2 size={15} /> },
   { id: 'salary',    label: 'Salary Report',icon: <BarChart3 size={15} /> },
@@ -202,6 +204,7 @@ export default function App() {
       {/* ── Main content ── */}
       <div className="admin-content">
         {activeTab === 'dashboard'  && <AdminDashboard adminName={displayName} />}
+        {activeTab === 'myteam'     && <MyTeam />}
         {activeTab === 'employees'  && <main className="app-main"><EmployeeTable departments={departments} /></main>}
         {activeTab === 'salary'     && <main className="app-main"><SalaryReport /></main>}
         {activeTab === 'admin'      && <main className="app-main"><AdminPanel departments={departments} onDepartmentsChange={setDepartments} currentUserId={profile?.id} /></main>}

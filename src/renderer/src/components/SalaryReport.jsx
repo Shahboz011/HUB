@@ -123,7 +123,8 @@ export default function SalaryReport() {
     const ws = XLSX.utils.json_to_sheet(rows)
     const wb = XLSX.utils.book_new()
     XLSX.utils.book_append_sheet(wb, ws, 'Salary Report')
-    XLSX.writeFile(wb, `salary-report-${new Date().toISOString().slice(0, 10)}.xlsx`)
+    const nyDate = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' })
+    XLSX.writeFile(wb, `salary-report-${nyDate}.xlsx`)
   }
 
   if (loading) return <div className="table-loading">Loading salary report…</div>
