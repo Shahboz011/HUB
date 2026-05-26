@@ -1,12 +1,20 @@
 import { useState, useEffect } from 'react'
 import { supabase } from './lib/supabase'
-import { Monitor, Users, Settings2, BarChart3, LogOut, Download, X, RotateCcw } from 'lucide-react'
+import { Monitor, Users, Settings2, BarChart3, LogOut, Download, X, RotateCcw, LayoutDashboard } from 'lucide-react'
 import AuthScreen from './components/AuthScreen'
 import EmployeeTable from './components/EmployeeTable'
 import AdminPanel from './components/AdminPanel'
 import EmployeeView from './components/EmployeeView'
 import SalaryReport from './components/SalaryReport'
 import CompleteProfile from './components/CompleteProfile'
+import AdminDashboard from './components/AdminDashboard'
+
+const ADMIN_NAV = [
+  { id: 'dashboard', label: 'Dashboard',    icon: <LayoutDashboard size={15} /> },
+  { id: 'employees', label: 'Employees',    icon: <Users size={15} /> },
+  { id: 'admin',     label: 'Admin Panel',  icon: <Settings2 size={15} /> },
+  { id: 'salary',    label: 'Salary Report',icon: <BarChart3 size={15} /> },
+]
 
 function UpdateBanner({ state, progress, version, onRestart, onDismiss }) {
   if (state === 'downloading') {
@@ -57,7 +65,7 @@ export default function App() {
   const [profile, setProfile] = useState(null)
   const [departments, setDepartments] = useState([])
   const [loading, setLoading] = useState(true)
-  const [activeTab, setActiveTab] = useState('employees')
+  const [activeTab, setActiveTab] = useState('dashboard')
   const [updateState, setUpdateState] = useState(null) // null | 'downloading' | 'ready'
   const [updateProgress, setUpdateProgress] = useState(0)
   const [updateVersion, setUpdateVersion] = useState('')
@@ -149,69 +157,55 @@ export default function App() {
   }
 
   return (
-    <div className="app">
-      <header className="app-header">
-        <div className="header-left">
-          <div className="logo-mark">
-            <Monitor size={18} />
+    <div className="admin-shell">
+      {/* ── Admin sidebar ── */}
+      <aside className="admin-sidebar">
+        <div className="admin-sb-brand">
+          <div className="logo-mark" style={{ width: 32, height: 32 }}>
+            <Monitor size={16} />
           </div>
           <div>
-            <h1 className="app-title">Salary Command Center</h1>
-            <p className="app-subtitle">
-              Payroll management &amp; calculation engine
-              {appVersion && <span className="app-version-badge">v{appVersion}</span>}
-            </p>
+            <div className="admin-sb-title">SCC</div>
+            <div className="admin-sb-sub">Command Center</div>
           </div>
         </div>
 
-        {isAdmin && (
-          <nav className="header-nav">
+        <nav className="admin-sb-nav">
+          {ADMIN_NAV.map(item => (
             <button
-              className={`nav-tab ${activeTab === 'employees' ? 'active' : ''}`}
-              onClick={() => setActiveTab('employees')}
+              key={item.id}
+              className={`admin-sb-item ${activeTab === item.id ? 'admin-sb-active' : ''}`}
+              onClick={() => setActiveTab(item.id)}
             >
-              <Users size={15} />
-              Employees
+              {item.icon}
+              {item.label}
             </button>
-            <button
-              className={`nav-tab ${activeTab === 'admin' ? 'active' : ''}`}
-              onClick={() => setActiveTab('admin')}
-            >
-              <Settings2 size={15} />
-              Admin Panel
-            </button>
-            <button
-              className={`nav-tab ${activeTab === 'salary' ? 'active' : ''}`}
-              onClick={() => setActiveTab('salary')}
-            >
-              <BarChart3 size={15} />
-              Salary Report
-            </button>
-          </nav>
-        )}
+          ))}
+        </nav>
 
-        <div className="header-right">
-          <div className="user-chip">
-            <div className="user-avatar">{displayName[0]?.toUpperCase()}</div>
-            <div className="user-info">
-              <span className="user-name">{displayName}</span>
-              <span className={`role-badge ${isAdmin ? 'role-admin' : 'role-employee'}`}>
-                {isAdmin ? 'Admin' : 'Employee'}
-              </span>
+        {appVersion && <div className="admin-sb-version">v{appVersion}</div>}
+
+        <div className="admin-sb-footer">
+          <div className="admin-sb-user">
+            <div className="admin-sb-avatar">{displayName[0]?.toUpperCase()}</div>
+            <div className="admin-sb-userinfo">
+              <span className="admin-sb-username">{displayName}</span>
+              <span className="role-badge role-admin">Admin</span>
             </div>
           </div>
-          <button className="sign-out-btn" onClick={handleSignOut} title="Sign out">
-            <LogOut size={16} />
+          <button className="admin-sb-signout" onClick={handleSignOut} title="Sign out">
+            <LogOut size={15} />
           </button>
         </div>
-      </header>
+      </aside>
 
-      <main className="app-main">
-        {activeTab === 'employees' ? <EmployeeTable departments={departments} />
-          : activeTab === 'salary' ? <SalaryReport />
-          : <AdminPanel departments={departments} onDepartmentsChange={setDepartments} currentUserId={profile?.id} />
-        }
-      </main>
+      {/* ── Main content ── */}
+      <div className="admin-content">
+        {activeTab === 'dashboard'  && <AdminDashboard adminName={displayName} />}
+        {activeTab === 'employees'  && <main className="app-main"><EmployeeTable departments={departments} /></main>}
+        {activeTab === 'salary'     && <main className="app-main"><SalaryReport /></main>}
+        {activeTab === 'admin'      && <main className="app-main"><AdminPanel departments={departments} onDepartmentsChange={setDepartments} currentUserId={profile?.id} /></main>}
+      </div>
 
       {updateState && <UpdateBanner state={updateState} progress={updateProgress} version={updateVersion} onRestart={() => window.electronAPI?.installUpdate()} onDismiss={() => setUpdateState(null)} />}
     </div>

@@ -2,12 +2,10 @@ import { useState, useEffect, useRef } from 'react'
 import {
   Monitor, LayoutDashboard, UserCircle2, HelpCircle, LogOut,
   Play, StopCircle, Info, ChevronDown, MessageCircle, Activity,
+  Coffee, Utensils,
 } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 
-function fmt(v) {
-  return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2 }).format(v)
-}
 function pad(n) { return String(Math.floor(n)).padStart(2, '0') }
 
 const NAV = [
@@ -38,6 +36,17 @@ export default function EmployeeView({ profile, onSignOut }) {
   const lastIdleSecsRef = useRef(0)     // most recent powerMonitor reading
   const trackingStateRef = useRef({ isIdle: false, sessionId: null, employeeId: null })
 
+  const [breakStatus, setBreakStatus] = useState(null) // null | 'break' | 'restroom' | 'lunch'
+  const [breakStartAt, setBreakStartAt] = useState(null)
+  const breakStartAtRef = useRef(null)
+  const totalBreakRef = useRef(0)
+  const totalUnpaidBreakRef = useRef(0)
+  const [breakCount, setBreakCount] = useState(0)  // # of 20-min paid breaks used this session
+  const breakCountRef = useRef(0)
+  const usedRestRoomSecsRef = useRef(0)             // cumulative restroom seconds used
+  const currentBreakAllowanceRef = useRef(0)        // paid seconds available for the current break
+  const [currentBreakAllowance, setCurrentBreakAllowance] = useState(0)
+
   useEffect(() => {
     window.electronAPI?.getVersion?.().then(v => { if (v) setAppVersion(v) })
   }, [])
@@ -53,6 +62,22 @@ export default function EmployeeView({ profile, onSignOut }) {
       if (s) {
         justRestoredRef.current = true
         totalIdleRef.current = Number(s.accumulated_idle_secs) || 0
+        totalBreakRef.current = Number(s.accumulated_break_secs) || 0
+        totalUnpaidBreakRef.current = Number(s.accumulated_unpaid_break_secs) || 0
+        breakCountRef.current = Number(s.break_count) || 0
+        setBreakCount(Number(s.break_count) || 0)
+        usedRestRoomSecsRef.current = Number(s.used_restroom_secs) || 0
+        if (s.break_status) {
+          setBreakStatus(s.break_status)
+          const allowance = Number(s.current_break_allowance_secs) || 0
+          currentBreakAllowanceRef.current = allowance
+          setCurrentBreakAllowance(allowance)
+          if (s.break_started_at) {
+            const bStart = new Date(s.break_started_at).getTime()
+            breakStartAtRef.current = bStart
+            setBreakStartAt(bStart)
+          }
+        }
         setActiveSession(s)
         setElapsed(Math.floor((Date.now() - new Date(s.started_at).getTime()) / 1000))
         window.electronAPI?.setTracking?.(true)
@@ -213,7 +238,7 @@ export default function EmployeeView({ profile, onSignOut }) {
       .subscribe((status) => {
         if (status === 'SUBSCRIBED') {
           ch.send({ type: 'broadcast', event: 'status',
-            payload: { employee_id: fresh.id, is_idle: false, ts: Date.now() } })
+            payload: { employee_id: fresh.id, is_idle: false, break_status: null, ts: Date.now() } })
         }
       })
     activityBcRef.current = ch
@@ -224,8 +249,8 @@ export default function EmployeeView({ profile, onSignOut }) {
   useEffect(() => {
     if (!activityBcRef.current || !fresh.id || !activeSession) return
     activityBcRef.current.send({ type: 'broadcast', event: 'status',
-      payload: { employee_id: fresh.id, is_idle: isIdle, ts: Date.now() } }).catch(() => {})
-  }, [isIdle, activeSession?.id, fresh.id])
+      payload: { employee_id: fresh.id, is_idle: isIdle, break_status: breakStatus, ts: Date.now() } }).catch(() => {})
+  }, [isIdle, breakStatus, activeSession?.id, fresh.id])
 
   // Persist idle state to DB so admin dashboard survives refresh
   useEffect(() => {
@@ -266,11 +291,33 @@ export default function EmployeeView({ profile, onSignOut }) {
   }
 
   async function clockOut() {
+    // Finalize any in-progress break before closing the session
+    let finalBreakSecs = totalBreakRef.current
+    let finalUnpaidSecs = totalUnpaidBreakRef.current
+    let finalBreakCount = breakCountRef.current
+    let finalRestRoomSecs = usedRestRoomSecsRef.current
+    if (breakStartAtRef.current !== null) {
+      const dur = (Date.now() - breakStartAtRef.current) / 1000
+      finalBreakSecs += dur
+      finalUnpaidSecs += Math.max(0, dur - currentBreakAllowanceRef.current)
+      if (breakStatus === 'break') finalBreakCount += 1
+      else if (breakStatus === 'restroom') finalRestRoomSecs += dur
+      breakStartAtRef.current = null
+    }
+    currentBreakAllowanceRef.current = 0
+    setCurrentBreakAllowance(0)
+    setBreakStartAt(null)
+    setBreakStatus(null)
     setClocking(true)
     window.electronAPI?.setTracking?.(false)
-    // The RPC sets ended_at = now() server-side, reads accumulated_idle_secs +
-    // any in-progress idle_started_at from the DB, and updates hours_worked atomically.
-    // No client clock is involved in the duration calculation.
+    // Save final break data so admin can see it; then clock out server-side
+    await supabase.from('work_sessions').update({
+      break_status: null, break_started_at: null, current_break_allowance_secs: 0,
+      accumulated_break_secs: finalBreakSecs,
+      accumulated_unpaid_break_secs: finalUnpaidSecs,
+      break_count: finalBreakCount,
+      used_restroom_secs: finalRestRoomSecs,
+    }).eq('id', activeSession.id)
     const { data: durationHours } = await supabase.rpc('clock_out_session', {
       p_session_id: activeSession.id,
     })
@@ -281,6 +328,11 @@ export default function EmployeeView({ profile, onSignOut }) {
     idleStartAtRef.current = null
     setIdleStartAt(null)
     setIsIdle(false)
+    totalBreakRef.current = 0
+    totalUnpaidBreakRef.current = 0
+    breakCountRef.current = 0
+    setBreakCount(0)
+    usedRestRoomSecsRef.current = 0
     setClocking(false)
   }
 
@@ -294,21 +346,84 @@ export default function EmployeeView({ profile, onSignOut }) {
     setIsIdle(false)
   }
 
+  function startBreak(type) {
+    if (!activeSession || breakStatus) return
+    // Compute paid allowance for this break type:
+    // - restroom: 5 min per completed elapsed hour, minus already-used restroom time
+    // - break: 20 min flat if fewer than 2 paid breaks have been used this session
+    // - lunch: no paid window defined yet
+    let allowance = 0
+    if (type === 'restroom') {
+      const totalAllowanceSecs = Math.floor(elapsed / 3600) * 5 * 60
+      allowance = Math.max(0, totalAllowanceSecs - usedRestRoomSecsRef.current)
+    } else if (type === 'break') {
+      allowance = breakCountRef.current < 2 ? 20 * 60 : 0
+    }
+    const now = Date.now()
+    currentBreakAllowanceRef.current = allowance
+    setCurrentBreakAllowance(allowance)
+    breakStartAtRef.current = now
+    setBreakStartAt(now)
+    setBreakStatus(type)
+    supabase.from('work_sessions')
+      .update({
+        break_status: type,
+        break_started_at: new Date(now).toISOString(),
+        current_break_allowance_secs: allowance,
+      })
+      .eq('id', activeSession.id)
+      .then(() => {})
+  }
+
+  function endBreak() {
+    if (!breakStatus) return
+    let duration = 0
+    if (breakStartAtRef.current !== null) {
+      duration = (Date.now() - breakStartAtRef.current) / 1000
+      totalBreakRef.current += duration
+      breakStartAtRef.current = null
+    }
+    const unpaid = Math.max(0, duration - currentBreakAllowanceRef.current)
+    totalUnpaidBreakRef.current += unpaid
+
+    const prevStatus = breakStatus
+    if (prevStatus === 'restroom') {
+      usedRestRoomSecsRef.current += duration
+    } else if (prevStatus === 'break') {
+      breakCountRef.current += 1
+      setBreakCount(breakCountRef.current)
+    }
+
+    currentBreakAllowanceRef.current = 0
+    setCurrentBreakAllowance(0)
+    setBreakStartAt(null)
+    setBreakStatus(null)
+
+    supabase.from('work_sessions')
+      .update({
+        break_status: null,
+        break_started_at: null,
+        current_break_allowance_secs: 0,
+        accumulated_break_secs: totalBreakRef.current,
+        accumulated_unpaid_break_secs: totalUnpaidBreakRef.current,
+        break_count: breakCountRef.current,
+        used_restroom_secs: usedRestRoomSecsRef.current,
+      })
+      .eq('id', activeSession.id)
+      .then(() => {})
+  }
+
   if (loading) return <div className="ev-loading">Loading…</div>
 
   const rate = Number(fresh.hourly_rate) || 0
   const totalHours = Number(fresh.hours_worked) || 0
-  const bonuses = Number(fresh.bonuses) || 0
-  const fines = Number(fresh.fines) || 0
-  const totalNet = Math.max(0, totalHours * rate + bonuses - fines)
 
-  // Activity-adjusted values (idle time excluded from salary)
+  // Activity-adjusted values (idle time excluded)
   const currentIdleContrib = idleStartAtRef.current !== null
     ? (Date.now() - idleStartAtRef.current) / 1000 : 0
   const effectiveIdleSecs = totalIdleRef.current + currentIdleContrib
   const activeSecs = Math.max(0, elapsed - effectiveIdleSecs)
   const activityPct = elapsed > 30 ? Math.round((activeSecs / elapsed) * 100) : 100
-  const sessionEarned = (activeSecs / 3600) * rate  // only active time pays
 
   const h = Math.floor(activeSecs / 3600)
   const m = Math.floor((activeSecs % 3600) / 60)
@@ -341,9 +456,24 @@ export default function EmployeeView({ profile, onSignOut }) {
         </div>
 
         {/* Status pill */}
-        <div className={`ev-sidebar-status ${activeSession ? (isIdle ? 'ev-status-idle' : 'ev-status-live') : 'ev-status-off'}`}>
-          <span className={activeSession ? (isIdle ? 'counter-dot-idle' : 'counter-dot') : 'counter-dot-off'} />
-          {activeSession ? (isIdle ? 'Idle — paused' : 'Working now') : 'Not clocked in'}
+        <div className={`ev-sidebar-status ${
+          !activeSession ? 'ev-status-off'
+          : breakStatus ? 'ev-status-break'
+          : isIdle ? 'ev-status-idle'
+          : 'ev-status-live'
+        }`}>
+          <span className={
+            !activeSession ? 'counter-dot-off'
+            : breakStatus ? 'counter-dot-break'
+            : isIdle ? 'counter-dot-idle'
+            : 'counter-dot'
+          } />
+          {!activeSession ? 'Available'
+            : breakStatus === 'break' ? 'On Break'
+            : breakStatus === 'restroom' ? 'Rest Room'
+            : breakStatus === 'lunch' ? 'Lunch Break'
+            : isIdle ? 'Idle — paused'
+            : 'Working'}
         </div>
 
         {/* Nav */}
@@ -381,13 +511,17 @@ export default function EmployeeView({ profile, onSignOut }) {
             fresh={fresh}
             activeSession={activeSession}
             elapsed={elapsed} h={h} m={m} s={s}
-            sessionEarned={sessionEarned}
             rate={rate} totalHours={totalHours}
-            bonuses={bonuses} fines={fines} totalNet={totalNet}
             clocking={clocking}
             clockIn={clockIn} clockOut={clockOut}
             isIdle={isIdle} activityPct={activityPct}
             activeSecs={activeSecs}
+            breakStatus={breakStatus}
+            breakStartAt={breakStartAt}
+            breakCount={breakCount}
+            currentBreakAllowance={currentBreakAllowance}
+            startBreak={startBreak}
+            endBreak={endBreak}
           />
         )}
 
@@ -433,8 +567,50 @@ function IdleModal({ idleStartAt, onContinue }) {
   )
 }
 
+// ── Break timer ──────────────────────────────────────────────────────────────
+function BreakTimer({ breakStartAt, breakStatus, paidAllowanceSecs }) {
+  const [secs, setSecs] = useState(() =>
+    breakStartAt ? Math.floor((Date.now() - breakStartAt) / 1000) : 0
+  )
+  useEffect(() => {
+    const id = setInterval(() => {
+      setSecs(breakStartAt ? Math.floor((Date.now() - breakStartAt) / 1000) : 0)
+    }, 1000)
+    return () => clearInterval(id)
+  }, [breakStartAt])
+
+  const h = Math.floor(secs / 3600)
+  const m = Math.floor((secs % 3600) / 60)
+  const s = secs % 60
+  const timeStr = h > 0 ? `${h}h ${m}m ${s}s` : m > 0 ? `${m}m ${s}s` : `${s}s`
+  const label = breakStatus === 'lunch' ? 'Lunch Break'
+    : breakStatus === 'restroom' ? 'Rest Room'
+    : 'Break'
+
+  const isFullyUnpaid = paidAllowanceSecs === 0
+  const paidRemaining = Math.max(0, paidAllowanceSecs - secs)
+  const isOvertime = paidAllowanceSecs > 0 && secs >= paidAllowanceSecs
+  const prMins = Math.floor(paidRemaining / 60)
+  const prSecs = paidRemaining % 60
+  const paidStr = `${prMins}:${String(prSecs).padStart(2, '0')}`
+
+  return (
+    <div className="break-timer">
+      <span className="break-timer-label">{label}</span>
+      <span className="break-timer-time">{timeStr}</span>
+      {isFullyUnpaid ? (
+        <span className="break-tag break-tag-unpaid">Salary paused</span>
+      ) : isOvertime ? (
+        <span className="break-tag break-tag-overtime">Paid time ended — salary paused</span>
+      ) : (
+        <span className="break-tag break-tag-paid">{paidStr} paid time remaining</span>
+      )}
+    </div>
+  )
+}
+
 // ── Dashboard ────────────────────────────────────────────────────────────────
-function DashboardPanel({ fresh, activeSession, elapsed, h, m, s, sessionEarned, rate, totalHours, bonuses, fines, totalNet, clocking, clockIn, clockOut, isIdle, activityPct, activeSecs }) {
+function DashboardPanel({ fresh, activeSession, elapsed, h, m, s, rate, totalHours, clocking, clockIn, clockOut, isIdle, activityPct, activeSecs, breakStatus, breakStartAt, breakCount, currentBreakAllowance, startBreak, endBreak }) {
   if (!fresh?.department) {
     return (
       <div className="ev-content-area">
@@ -456,19 +632,21 @@ function DashboardPanel({ fresh, activeSession, elapsed, h, m, s, sessionEarned,
     <div className="ev-content-area">
       <div className="ev-page-header">
         <h2 className="ev-page-title">Dashboard</h2>
-        <p className="ev-page-sub">Track your shift and earnings in real time.</p>
+        <p className="ev-page-sub">Track your shift in real time.</p>
       </div>
 
       {/* Live counter */}
       <div className={`counter-hero ${activeSession ? 'counter-active' : 'counter-idle'}`}>
-        {activeSession && <div className="counter-pulse-ring" />}
+        {activeSession && !breakStatus && <div className="counter-pulse-ring" />}
 
         <div className="counter-status">
           {activeSession
-            ? isIdle
-              ? <><span className="counter-dot-idle" />Paused — No activity detected</>
-              : <><span className="counter-dot" />Live — Shift in progress</>
-            : <><span className="counter-dot-off" />Not clocked in</>}
+            ? breakStatus === 'break' ? <><span className="counter-dot-break" />On Break</>
+            : breakStatus === 'restroom' ? <><span className="counter-dot-break" />Rest Room</>
+            : breakStatus === 'lunch' ? <><span className="counter-dot-break" />Lunch Break</>
+            : isIdle ? <><span className="counter-dot-idle" />Paused — No activity detected</>
+            : <><span className="counter-dot" />Live — Shift in progress</>
+            : <><span className="counter-dot-off" />Available</>}
         </div>
 
         <div className="counter-time">
@@ -488,16 +666,12 @@ function DashboardPanel({ fresh, activeSession, elapsed, h, m, s, sessionEarned,
           </span>
         </div>
 
-        <div className="counter-earned">
-          <span className="counter-earned-label">Earned this shift</span>
-          <span className="counter-earned-value">{fmt(sessionEarned)}</span>
-          {activeSession && elapsed > 30 && (
-            <span className="counter-activity-pct" style={{ color: activityPct >= 80 ? 'var(--positive)' : activityPct >= 50 ? '#f59e0b' : 'var(--negative)' }}>
-              <Activity size={11} style={{ display: 'inline', marginRight: 3 }} />
-              {activityPct}% active
-            </span>
-          )}
-        </div>
+        {activeSession && elapsed > 30 && (
+          <span className="counter-activity-pct" style={{ color: activityPct >= 80 ? 'var(--positive)' : activityPct >= 50 ? '#f59e0b' : 'var(--negative)' }}>
+            <Activity size={11} style={{ display: 'inline', marginRight: 3 }} />
+            {activityPct}% active
+          </span>
+        )}
 
         <button
           className={`clock-btn ${activeSession ? 'clock-out' : 'clock-in'}`}
@@ -512,33 +686,47 @@ function DashboardPanel({ fresh, activeSession, elapsed, h, m, s, sessionEarned,
         {rate === 0 && (
           <p className="clock-note">Your admin needs to set your hourly rate before you can clock in.</p>
         )}
+
+        {activeSession && !isIdle && !breakStatus && (
+          <div className="break-btns">
+            <button
+              className="break-btn"
+              onClick={() => startBreak('break')}
+              disabled={breakCount >= 2}
+              title={breakCount >= 2 ? 'Both paid breaks used' : `${2 - breakCount} of 2 paid breaks remaining`}
+            >
+              <Coffee size={13} />
+              {breakCount >= 2 ? 'Break (used)' : `Break (${2 - breakCount}×20m)`}
+            </button>
+            <button className="break-btn" onClick={() => startBreak('restroom')}
+              title={`5 min paid per elapsed hour`}>
+              Rest Room
+            </button>
+            <button className="break-btn" onClick={() => startBreak('lunch')}>
+              <Utensils size={13} /> Lunch
+            </button>
+          </div>
+        )}
+
+        {activeSession && breakStatus && (
+          <div className="break-active-wrap">
+            <BreakTimer
+              breakStartAt={breakStartAt}
+              breakStatus={breakStatus}
+              paidAllowanceSecs={currentBreakAllowance}
+            />
+            <button className="break-return-btn" onClick={endBreak}>
+              ▶ Return to Work
+            </button>
+          </div>
+        )}
       </div>
 
-      {/* Stats grid */}
-      <div className="ev-grid">
+      {/* Stats */}
+      <div className="ev-grid" style={{ gridTemplateColumns: '1fr' }}>
         <div className="ev-stat-card">
           <span className="ev-stat-label">Total Hours Logged</span>
           <span className="ev-stat-value">{totalHours.toFixed(2)}h</span>
-        </div>
-        <div className="ev-stat-card">
-          <span className="ev-stat-label">Base Pay</span>
-          <span className="ev-stat-value">{fmt(totalHours * rate)}</span>
-        </div>
-        <div className="ev-stat-card">
-          <span className="ev-stat-label">Hourly Rate</span>
-          <span className="ev-stat-value">${rate}/hr</span>
-        </div>
-        <div className="ev-stat-card ev-positive">
-          <span className="ev-stat-label">Bonuses</span>
-          <span className="ev-stat-value">{fmt(bonuses)}</span>
-        </div>
-        <div className="ev-stat-card ev-negative">
-          <span className="ev-stat-label">Deductions</span>
-          <span className="ev-stat-value">{fmt(fines)}</span>
-        </div>
-        <div className="ev-stat-card ev-highlight">
-          <span className="ev-stat-label">Net Salary</span>
-          <span className="ev-stat-value ev-big">{fmt(totalNet)}</span>
         </div>
       </div>
 
@@ -557,8 +745,6 @@ function DashboardPanel({ fresh, activeSession, elapsed, h, m, s, sessionEarned,
           </div>
         </div>
       )}
-
-      <p className="ev-note">Only active time counts toward your salary. Idle periods are automatically deducted.</p>
 
       <EmployeeTransactions employeeId={fresh.id} />
     </div>
@@ -644,12 +830,6 @@ function ProfilePanel({ fresh, setFresh }) {
             <span className="profile-ro-value">{fresh.position || <span style={{ color: 'var(--text-muted)', fontStyle: 'italic' }}>Not assigned</span>}</span>
           </div>
           <div className="profile-ro-field">
-            <span className="profile-field-label">Hourly Rate</span>
-            <span className="profile-ro-value" style={{ color: 'var(--accent)', fontWeight: 700, fontFamily: 'var(--font-mono)' }}>
-              ${Number(fresh.hourly_rate) || 0}/hr
-            </span>
-          </div>
-          <div className="profile-ro-field">
             <span className="profile-field-label">Role</span>
             <span className={`role-badge ${fresh.role === 'admin' ? 'role-admin' : 'role-employee'}`}>
               {fresh.role || 'employee'}
@@ -677,12 +857,8 @@ const FAQS = [
     a: 'Yes. The clock-in time is saved on the server. Even if you close or minimize the app, your hours continue to accumulate from the moment you clocked in.',
   },
   {
-    q: 'What is Net Salary?',
-    a: 'Net Salary = (Total Hours × Hourly Rate) + Bonuses − Deductions. It is calculated in real time and updates every time your admin makes a change.',
-  },
-  {
     q: 'Can I see my bonus and fine history?',
-    a: 'Yes — scroll down on the Dashboard to see the full Bonuses & Fines history with dates, amounts, and reasons.',
+    a: 'Yes — scroll down on the Dashboard to see the Bonuses & Fines history with dates and reasons.',
   },
   {
     q: 'My hourly rate or department is wrong. What do I do?',
@@ -754,7 +930,6 @@ function EmployeeTransactions({ employeeId }) {
           <span className="bf-lh-date">Date</span>
           <span className="bf-lh-type">Type</span>
           <span className="bf-lh-note">Reason</span>
-          <span className="bf-lh-amt">Amount</span>
         </div>
         {transactions.map(tx => (
           <div key={tx.id} className={`bf-row bf-row-${tx.type}`}>
@@ -764,9 +939,6 @@ function EmployeeTransactions({ employeeId }) {
             </span>
             <span className={`bf-badge bf-badge-${tx.type}`}>{tx.type === 'bonus' ? '+ Bonus' : '− Fine'}</span>
             <span className="bf-row-note">{tx.note || <span style={{ color: 'var(--text-muted)' }}>—</span>}</span>
-            <span className={`bf-row-amt bf-amt-${tx.type}`}>
-              {tx.type === 'bonus' ? '+' : '−'}{new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2 }).format(tx.amount)}
-            </span>
           </div>
         ))}
       </div>
