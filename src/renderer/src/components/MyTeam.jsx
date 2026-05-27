@@ -205,6 +205,7 @@ export default function MyTeam({ managedDept }) {
   const MEDALS = ['🥇', '🥈', '🥉', '4th', '5th']
 
   return (
+    <>
     <div className="myteam">
       {/* ── Header ── */}
       <div className="myteam-header">
@@ -460,5 +461,6 @@ export default function MyTeam({ managedDept }) {
         onClose={() => setSelectedWorker(null)}
       />
     )}
+    </>
   )
 }

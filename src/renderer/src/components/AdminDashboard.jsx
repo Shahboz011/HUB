@@ -293,6 +293,7 @@ export default function AdminDashboard({ adminName, managedDept }) {
   )
 
   return (
+    <>
     <div className="adash">
       <div className="adash-header">
         <div>
@@ -529,5 +530,6 @@ export default function AdminDashboard({ adminName, managedDept }) {
         onClose={() => setSelectedWorker(null)}
       />
     )}
+    </>
   )
 }
