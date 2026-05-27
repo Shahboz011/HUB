@@ -218,8 +218,8 @@ export default function App() {
             <Monitor size={16} />
           </div>
           <div>
-            <div className="admin-sb-title">SCC</div>
-            <div className="admin-sb-sub">{managedDept ? managedDept : 'Command Center'}</div>
+            <div className="admin-sb-title">PharmaStaff</div>
+            <div className="admin-sb-sub">{managedDept ? managedDept : 'Hub'}</div>
           </div>
         </div>
 

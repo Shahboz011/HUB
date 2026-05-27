@@ -89,7 +89,7 @@ function DeptMembers({ dept, employees, departments, onBack, onEmployeeUpdate, o
 
   async function copyCredentials() {
     const { email, tempPassword } = createdCredentials
-    const text = `Salary Command Center Login\nEmail: ${email}\nTemp Password: ${tempPassword}\n\nOpen the app and sign in. You will be asked to set your name and a new password.`
+    const text = `PharmaStaff Hub Login\nEmail: ${email}\nTemp Password: ${tempPassword}\n\nOpen the app and sign in. You will be asked to set your name and a new password.`
     await electronAPI.copyToClipboard(text)
     setCopied(true)
     setTimeout(() => setCopied(false), 2500)
@@ -394,7 +394,7 @@ export default function AdminPanel({ departments, onDepartmentsChange, deptSched
 
   async function copyInvCredentials() {
     const { email, tempPassword } = invCredentials
-    const text = `Salary Command Center Login\nEmail: ${email}\nTemp Password: ${tempPassword}\n\nOpen the app and sign in. You will be asked to set your name and a new password.`
+    const text = `PharmaStaff Hub Login\nEmail: ${email}\nTemp Password: ${tempPassword}\n\nOpen the app and sign in. You will be asked to set your name and a new password.`
     await electronAPI.copyToClipboard(text)
     setInvCopied(true)
     setTimeout(() => setInvCopied(false), 2500)

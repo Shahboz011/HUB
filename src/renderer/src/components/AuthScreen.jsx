@@ -27,7 +27,7 @@ export default function AuthScreen() {
           </div>
         </div>
 
-        <h1 className="auth-title">Salary Command Center</h1>
+        <h1 className="auth-title">PharmaStaff Hub</h1>
         <p className="auth-subtitle">Sign in to your account</p>
 
         {error && <div className="auth-error">{error}</div>}

@@ -11,7 +11,7 @@ const SERVICE_KEY  = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZ
 
 function generateTempPassword() {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
-  let pwd = 'SCC-'
+  let pwd = 'PSH-'
   for (let i = 0; i < 6; i++) pwd += chars[crypto.randomInt(chars.length)]
   return pwd
 }
@@ -588,7 +588,7 @@ function showIdlePopup() {
     resizable: false, minimizable: false, maximizable: false,
     alwaysOnTop: true,
     skipTaskbar: false,
-    title: 'SCC — Timer Paused',
+    title: 'PharmaStaff Hub — Timer Paused',
     autoHideMenuBar: true,
     webPreferences: { nodeIntegration: true, contextIsolation: false },
   })
@@ -699,7 +699,7 @@ function createWindow() {
     height: 900,
     minWidth: 1000,
     minHeight: 650,
-    title: 'Salary Command Center',
+    title: 'PharmaStaff Hub',
     backgroundColor: '#f1f5f9',
     titleBarStyle: 'default',
     webPreferences: {

@@ -613,7 +613,7 @@ export default function EmployeeView({ profile, onSignOut, deptSchedule }) {
           <div className="logo-mark" style={{ width: 28, height: 28 }}>
             <Monitor size={14} />
           </div>
-          <span className="ev-sidebar-brand-name">SCC</span>
+          <span className="ev-sidebar-brand-name">PharmaStaff</span>
         </div>
 
         {/* User card */}
@@ -1037,7 +1037,7 @@ function FAQPanel() {
     <div className="ev-content-area">
       <div className="ev-page-header">
         <h2 className="ev-page-title">Help &amp; FAQ</h2>
-        <p className="ev-page-sub">Answers to common questions about Salary Command Center.</p>
+        <p className="ev-page-sub">Answers to common questions about PharmaStaff Hub.</p>
       </div>
 
       <div className="faq-list">

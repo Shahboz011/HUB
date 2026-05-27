@@ -1,7 +1,7 @@
 {
-  "name": "salary-command-center",
-  "version": "1.21.0",
-  "description": "Salary Command Center — professional payroll dashboard",
+  "name": "pharmastaff-hub",
+  "version": "1.22.0",
+  "description": "PharmaStaff Hub — professional staff management",
   "author": "Shahboz Nurullaev",
   "main": "out/main/index.js",
   "type": "commonjs",
@@ -13,8 +13,9 @@
     "release": "electron-vite build && electron-builder --win --publish=always"
   },
   "build": {
-    "appId": "com.salarycommandcenter.app",
-    "productName": "Salary Command Center",
+    "appId": "com.pharmastaffhub.app",
+    "productName": "PharmaStaff Hub",
+    "icon": "LOGO/PharmaStaff HUB.ico",
     "files": [
       "out/**/*"
     ],
