@@ -2321,6 +2321,18 @@ html, body, #root {
   color: #6366f1;
   text-decoration: underline;
 }
+.col-employee-clickable {
+  cursor: pointer;
+  border-radius: 6px;
+  transition: background 0.15s;
+}
+.col-employee-clickable:hover {
+  background: rgba(99,102,241,0.07);
+}
+.col-employee-clickable:hover .employee-name {
+  color: #6366f1;
+  text-decoration: underline;
+}
 
 .wpm-overlay {
   position: fixed;

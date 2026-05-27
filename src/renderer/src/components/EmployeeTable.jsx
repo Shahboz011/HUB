@@ -5,6 +5,8 @@ import { Search, History } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import AttendanceView from './AttendanceView'
 import UserAvatar from './UserAvatar'
+import WorkerProfileModal from './WorkerProfileModal'
+
 
 const DEPT_COLORS = [
   '#6366f1','#8b5cf6','#ec4899','#f59e0b','#10b981',
@@ -50,7 +52,7 @@ function AvatarBadge({ emp }) {
 }
 
 function TableRow({ index, style, data }) {
-  const { employees, onFieldChange, activeSessions, activityMap, onViewHistory } = data
+  const { employees, onFieldChange, activeSessions, activityMap, onViewHistory, onViewProfile } = data
   const emp = employees[index]
   const isEven = index % 2 === 0
   const color = deptColor(emp.department)
@@ -70,11 +72,24 @@ function TableRow({ index, style, data }) {
   // DB field is authoritative after refresh; broadcast fills the gap before first DB write
   const empIsIdle = session && (session.is_idle === true || actStatus?.is_idle === true)
 
+  // Compute status for profile modal
+  const breakStatus = session?.break_status
+  let status = { type: 'offline', label: 'Offline', startedAt: null }
+  if (session) {
+    if      (breakStatus === 'break')    status = { type: 'break',    label: 'On Break',    startedAt: session.break_started_at }
+    else if (breakStatus === 'restroom') status = { type: 'restroom', label: 'Rest Room',   startedAt: session.break_started_at }
+    else if (breakStatus === 'lunch')    status = { type: 'lunch',    label: 'Lunch Break', startedAt: session.break_started_at }
+    else if (empIsIdle)                  status = { type: 'idle',     label: 'Idle',        startedAt: session.idle_started_at  }
+    else                                 status = { type: 'working',  label: 'Working',     startedAt: session.started_at       }
+  }
+
   return (
     <div style={style} className={`table-row ${isEven ? 'row-even' : 'row-odd'}`}>
       <div className="col col-index">{index + 1}</div>
 
-      <div className="col col-employee">
+      <div className="col col-employee col-employee-clickable"
+        onClick={() => onViewProfile({ emp, session, status })}
+        title="View profile">
         <AvatarBadge emp={emp} />
         <div className="employee-info">
           <span className="employee-name">{emp.full_name || '—'}</span>
@@ -219,6 +234,7 @@ export default function EmployeeTable({ departments, managedDept }) {
   const [filterDept, setFilterDept] = useState('All')
   const [saving, setSaving] = useState(false)
   const [selectedEmployee, setSelectedEmployee] = useState(null)
+  const [selectedProfile, setSelectedProfile] = useState(null)
   const debounceRefs = useRef({})
 
   useEffect(() => {
@@ -356,7 +372,7 @@ export default function EmployeeTable({ departments, managedDept }) {
               <List
                 height={height} width={width}
                 itemCount={filtered.length} itemSize={52}
-                itemData={{ employees: filtered, onFieldChange, activeSessions, activityMap, onViewHistory: setSelectedEmployee }}
+                itemData={{ employees: filtered, onFieldChange, activeSessions, activityMap, onViewHistory: setSelectedEmployee, onViewProfile: setSelectedProfile }}
                 overscanCount={10}
               >
                 {TableRow}
@@ -367,6 +383,15 @@ export default function EmployeeTable({ departments, managedDept }) {
       </div>
 
       <SummaryBar employees={filtered} />
+
+      {selectedProfile && (
+        <WorkerProfileModal
+          emp={selectedProfile.emp}
+          session={selectedProfile.session}
+          status={selectedProfile.status}
+          onClose={() => setSelectedProfile(null)}
+        />
+      )}
     </div>
   )
 }
