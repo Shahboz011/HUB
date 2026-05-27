@@ -626,7 +626,7 @@ function setupActivityMonitor() {
       wasIdle = true
       win.webContents.send('user-idle', idleSecs)
       showIdlePopup()   // native window — visible even when app is minimised
-    } else if (wasIdle && idleSecs < 30) {
+    } else if (wasIdle && idleSecs < IDLE_THRESHOLD_SECS) {
       wasIdle = false
       closeIdlePopup()
       win.webContents.send('user-active')

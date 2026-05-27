@@ -81,9 +81,7 @@ function fmtDur(totalSecs) {
 const BREAK_LABELS = { restroom: '🚶 Restroom', break: '☕ Break', lunch: '🍽 Lunch' }
 
 function BreakHistoryRow({ emp, session, breakLogItems }) {
-  const salaryStart = session ? (session.salary_start_at || session.started_at) : null
-  const wallSecs = salaryStart ? (Date.now() - new Date(salaryStart).getTime()) / 1000 : 0
-  const adminCurrentHour = Math.floor(wallSecs / 3600)
+  const adminCurrentHour = new Date().getHours()
   const sessionHour = Number(session?.restroom_hour_index) || 0
   // used_restroom_secs is per-hour; only count it if employee's hour index matches current hour
   const restroomUsedSecs = (session && adminCurrentHour === sessionHour)
@@ -251,8 +249,18 @@ export default function AdminDashboard({ adminName, managedDept }) {
 
     const poll = setInterval(async () => {
       const { data } = await supabase.from('work_sessions').select('*').is('ended_at', null)
-      if (data) { const m = {}; data.forEach(s => { m[s.employee_id] = s }); setActiveSessions(m) }
-    }, 15000)
+      if (data) {
+        setActiveSessions(prev => {
+          const next = { ...prev }
+          const polled = {}
+          data.forEach(s => { polled[s.employee_id] = s })
+          // Remove sessions that ended, merge in polled data without clobbering subscription updates
+          Object.keys(next).forEach(id => { if (!polled[id]) delete next[id] })
+          Object.entries(polled).forEach(([id, s]) => { next[id] = s })
+          return next
+        })
+      }
+    }, 30000)
 
     return () => {
       supabase.removeChannel(profSub)
@@ -364,9 +372,7 @@ export default function AdminDashboard({ adminName, managedDept }) {
                 const isExpanded  = expandedRow === emp.id
 
                 // Restroom live usage for the inline mini-bar (per-hour model)
-                const salaryStart = session ? (session.salary_start_at || session.started_at) : null
-                const wallSecs = salaryStart ? (Date.now() - new Date(salaryStart).getTime()) / 1000 : 0
-                const adminCurrentHour      = Math.floor(wallSecs / 3600)
+                const adminCurrentHour      = new Date().getHours()
                 const sessionHour           = Number(session?.restroom_hour_index) || 0
                 const restroomUsedSecs      = (session && adminCurrentHour === sessionHour)
                   ? Number(session.used_restroom_secs) || 0 : 0
