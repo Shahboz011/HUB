@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { Users, Award, Search } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import UserAvatar from './UserAvatar'
+import WorkerProfileModal from './WorkerProfileModal'
 
 const DEPT_COLORS = [
   '#6366f1','#8b5cf6','#ec4899','#f59e0b','#10b981',
@@ -114,6 +115,7 @@ export default function MyTeam({ managedDept }) {
   const [loading,        setLoading]        = useState(true)
   const [search,         setSearch]         = useState('')
   const [deptFilter,     setDeptFilter]     = useState('All')
+  const [selectedWorker, setSelectedWorker] = useState(null) // { emp, session, status }
   const [,               setTick]           = useState(0)
 
   useEffect(() => {
@@ -306,7 +308,9 @@ export default function MyTeam({ managedDept }) {
 
                 return (
                   <div key={emp.id} className={`myteam-tr ${i % 2 !== 0 ? 'myteam-tr-alt' : ''}`}>
-                    <div className="myteam-td mt-w-emp">
+                    <div className="myteam-td mt-w-emp adash-td-clickable"
+                      onClick={() => setSelectedWorker({ emp, session, status })}
+                      title="View profile">
                       <UserAvatar userId={emp.id} name={emp.full_name} avatarUrl={emp.avatar_url}
                         className="adash-avatar" style={{ background: color + '18', color, border: `1.5px solid ${color}35` }} />
                       <div className="adash-emp-info">
@@ -447,5 +451,14 @@ export default function MyTeam({ managedDept }) {
         </div>
       </div>
     </div>
+
+    {selectedWorker && (
+      <WorkerProfileModal
+        emp={selectedWorker.emp}
+        session={selectedWorker.session}
+        status={selectedWorker.status}
+        onClose={() => setSelectedWorker(null)}
+      />
+    )}
   )
 }

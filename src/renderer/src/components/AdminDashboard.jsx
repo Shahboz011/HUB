@@ -2,6 +2,7 @@ import { useState, useEffect, Fragment } from 'react'
 import { Users, Wifi, Coffee, WifiOff, TrendingUp, ChevronDown, ChevronUp } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import UserAvatar from './UserAvatar'
+import WorkerProfileModal from './WorkerProfileModal'
 
 const NY = 'America/New_York'
 
@@ -195,6 +196,7 @@ export default function AdminDashboard({ adminName, managedDept }) {
   const [activityMap,   setActivityMap]   = useState({})
   const [breakLog, setBreakLog] = useState([])
   const [expandedRow, setExpandedRow] = useState(null)
+  const [selectedWorker, setSelectedWorker] = useState(null) // { emp, session, status }
   const [, setTick] = useState(0)
   const [loading, setLoading] = useState(true)
 
@@ -375,7 +377,9 @@ export default function AdminDashboard({ adminName, managedDept }) {
                 return (
                   <Fragment key={emp.id}>
                     <div className={`adash-tr ${i % 2 === 0 ? '' : 'adash-tr-alt'}${isExpanded ? ' adash-tr-expanded' : ''}`}>
-                      <div className="adash-td w-emp">
+                      <div className="adash-td w-emp adash-td-clickable"
+                        onClick={() => setSelectedWorker({ emp, session, status })}
+                        title="View profile">
                         <UserAvatar userId={emp.id} name={emp.full_name} avatarUrl={emp.avatar_url}
                           className="adash-avatar" style={{ background: color + '18', color, border: `1.5px solid ${color}35` }} />
                         <div className="adash-emp-info">
@@ -516,5 +520,14 @@ export default function AdminDashboard({ adminName, managedDept }) {
         </div>
       </div>
     </div>
+
+    {selectedWorker && (
+      <WorkerProfileModal
+        emp={selectedWorker.emp}
+        session={selectedWorker.session}
+        status={selectedWorker.status}
+        onClose={() => setSelectedWorker(null)}
+      />
+    )}
   )
 }
