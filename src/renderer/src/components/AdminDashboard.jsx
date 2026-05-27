@@ -80,42 +80,13 @@ function fmtDur(totalSecs) {
 
 const BREAK_LABELS = { restroom: '🚶 Restroom', break: '☕ Break', lunch: '🍽 Lunch' }
 
-function BreakHistoryRow({ emp, session, breakLogItems }) {
-  const adminCurrentHour = new Date().getHours()
-  const sessionHour = Number(session?.restroom_hour_index) || 0
-  // used_restroom_secs is per-hour; only count it if employee's hour index matches current hour
-  const restroomUsedSecs = (session && adminCurrentHour === sessionHour)
-    ? Number(session.used_restroom_secs) || 0 : 0
-  const currentRestroomLive = (session?.break_status === 'restroom' && session?.break_started_at)
-    ? (Date.now() - new Date(session.break_started_at).getTime()) / 1000 : 0
-  const totalRestroomUsed = restroomUsedSecs + currentRestroomLive
-  const pct = Math.min(100, (totalRestroomUsed / (5 * 60)) * 100)
-
+function BreakHistoryRow({ emp, breakLogItems }) {
   return (
     <div className="adash-break-hist-row">
       <div className="adash-break-hist-inner">
         <div className="adash-break-hist-title">
           Break History — <strong>{emp.full_name || emp.email}</strong>
           <span className="adash-break-hist-badge">Today</span>
-        </div>
-
-        <div className="adash-break-meter-wrap">
-          <div className="adash-break-meter-head">
-            <span>🚶 Restroom — 5 min / hour (resets each hour)</span>
-            <span style={{ color: pct >= 100 ? '#ef4444' : '#64748b', fontWeight: 600 }}>
-              {session
-                ? `${fmtDur(totalRestroomUsed)} used of 5m this hour`
-                : 'No active session'}
-            </span>
-          </div>
-          {session && (
-            <div className="adash-break-meter-bar">
-              <div className="adash-break-meter-fill" style={{
-                width: `${pct}%`,
-                background: pct >= 100 ? '#ef4444' : pct >= 80 ? '#f59e0b' : '#3b82f6',
-              }} />
-            </div>
-          )}
         </div>
 
         {breakLogItems.length === 0 ? (
@@ -371,16 +342,6 @@ export default function AdminDashboard({ adminName, managedDept }) {
                 const empBreakLog = breakLogByEmp[emp.id] || []
                 const isExpanded  = expandedRow === emp.id
 
-                // Restroom live usage for the inline mini-bar (per-hour model)
-                const adminCurrentHour      = new Date().getHours()
-                const sessionHour           = Number(session?.restroom_hour_index) || 0
-                const restroomUsedSecs      = (session && adminCurrentHour === sessionHour)
-                  ? Number(session.used_restroom_secs) || 0 : 0
-                const currentRestroomLive   = (session?.break_status === 'restroom' && session?.break_started_at)
-                  ? (Date.now() - new Date(session.break_started_at).getTime()) / 1000 : 0
-                const totalRestroomUsed = restroomUsedSecs + currentRestroomLive
-                const restroomPct = Math.min(100, (totalRestroomUsed / (5 * 60)) * 100)
-
                 return (
                   <Fragment key={emp.id}>
                     <div className={`adash-tr ${i % 2 === 0 ? '' : 'adash-tr-alt'}${isExpanded ? ' adash-tr-expanded' : ''}`}>
@@ -406,20 +367,6 @@ export default function AdminDashboard({ adminName, managedDept }) {
                       <div className="adash-td w-breaks">
                         {session ? (
                           <div className="adash-breaks-cell">
-                            <>
-                              <div className="adash-restroom-summary">
-                                <span className="adash-restroom-label">Restroom</span>
-                                <span className="adash-restroom-val" style={{ color: restroomPct >= 100 ? '#ef4444' : '#64748b' }}>
-                                  {fmtDur(totalRestroomUsed)}/5m
-                                </span>
-                              </div>
-                              <div className="adash-restroom-mini-bar">
-                                <div className="adash-restroom-mini-fill" style={{
-                                  width: `${restroomPct}%`,
-                                  background: restroomPct >= 100 ? '#ef4444' : restroomPct >= 75 ? '#f59e0b' : '#3b82f6',
-                                }} />
-                              </div>
-                            </>
                             <div className="adash-breaks-footer">
                               <span className={`adash-breaks ${breaks >= 2 ? 'adash-breaks-used' : ''}`}>{breaks}/2</span>
                               <button
@@ -446,7 +393,7 @@ export default function AdminDashboard({ adminName, managedDept }) {
                       </div>
                     </div>
                     {isExpanded && (
-                      <BreakHistoryRow emp={emp} session={session} breakLogItems={empBreakLog} />
+                      <BreakHistoryRow emp={emp} breakLogItems={empBreakLog} />
                     )}
                   </Fragment>
                 )

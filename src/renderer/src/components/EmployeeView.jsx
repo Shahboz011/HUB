@@ -10,32 +10,6 @@ import UserAvatar from './UserAvatar'
 
 function pad(n) { return String(Math.floor(n)).padStart(2, '0') }
 
-// Split an idle period into paid (covered by hourly pool) and unpaid seconds.
-// idleStartMs / idleEndMs are real Unix timestamps in milliseconds.
-// poolByHour is a map of wallClockHour(0-23) → already-used pool seconds.
-// Returns { unpaidSecs, poolUpdates } — poolUpdates must be merged into poolByHour by caller.
-function computeIdleSplit(idleStartMs, idleEndMs, poolByHour) {
-  let unpaidSecs = 0
-  const poolUpdates = {}
-  let cursor = idleStartMs
-  while (cursor < idleEndMs) {
-    const hourKey = new Date(cursor).getHours()
-    const nextHour = new Date(cursor)
-    nextHour.setHours(hourKey + 1, 0, 0, 0)
-    const segEndMs = Math.min(idleEndMs, nextHour.getTime())
-    const segDur = (segEndMs - cursor) / 1000
-    if (segDur > 0) {
-      const alreadyUsed = (poolByHour[hourKey] || 0) + (poolUpdates[hourKey] || 0)
-      const available   = Math.max(0, 5 * 60 - alreadyUsed)
-      const paidSeg     = Math.min(segDur, available)
-      poolUpdates[hourKey] = (poolUpdates[hourKey] || 0) + paidSeg
-      unpaidSecs += segDur - paidSeg
-    }
-    cursor = segEndMs
-  }
-  return { unpaidSecs, poolUpdates }
-}
-
 const NAV = [
   { id: 'dashboard', label: 'Dashboard',   icon: <LayoutDashboard size={16} /> },
   { id: 'profile',   label: 'My Profile',  icon: <UserCircle2 size={16} /> },
@@ -71,9 +45,6 @@ export default function EmployeeView({ profile, onSignOut, deptSchedule }) {
   const totalUnpaidBreakRef = useRef(0)
   const [breakCount, setBreakCount] = useState(0)  // # of 20-min paid short breaks used (max 1)
   const breakCountRef = useRef(0)
-  const usedRestRoomSecsRef = useRef(0)             // pool seconds used in the current hour (DB sync mirror)
-  const restroomCurrentHourRef = useRef(0)          // which hour (0,1,2…) the pool counter belongs to
-  const poolByHourRef = useRef({})                  // hourIndex → total pool secs consumed (idle + restroom)
   const currentBreakAllowanceRef = useRef(0)        // paid seconds available for the current break
   const [currentBreakAllowance, setCurrentBreakAllowance] = useState(0)
   const [lunchUsed, setLunchUsed] = useState(false) // 20-min paid lunch (once per session)
@@ -105,22 +76,6 @@ export default function EmployeeView({ profile, onSignOut, deptSchedule }) {
         setBreakCount(Number(s.break_count) || 0)
         lunchUsedRef.current = !!s.lunch_used
         setLunchUsed(!!s.lunch_used)
-
-        // Rebuild full restroom pool from break_log — all hours, not just the current one
-        const { data: restroomLogs } = await supabase
-          .from('break_log')
-          .select('paid_secs, started_at')
-          .eq('session_id', s.id)
-          .eq('break_type', 'restroom')
-        const pool = {}
-        for (const log of restroomLogs || []) {
-          const hk = new Date(log.started_at).getHours()
-          pool[hk] = (pool[hk] || 0) + (Number(log.paid_secs) || 0)
-        }
-        poolByHourRef.current = pool
-        const nowHour = new Date().getHours()
-        restroomCurrentHourRef.current = nowHour
-        usedRestRoomSecsRef.current = pool[nowHour] || 0
 
         if (s.break_status) {
           setBreakStatus(s.break_status)
@@ -205,17 +160,7 @@ export default function EmployeeView({ profile, onSignOut, deptSchedule }) {
     })
     window.electronAPI.onUserActive?.(() => {
       if (idleStartAtRef.current !== null) {
-        const idleEndMs = Date.now()
-        if (salaryStartAtRef.current !== null) {
-          const { unpaidSecs, poolUpdates } = computeIdleSplit(idleStartAtRef.current, idleEndMs, poolByHourRef.current)
-          totalIdleRef.current += unpaidSecs
-          Object.assign(poolByHourRef.current, poolUpdates)
-        } else {
-          totalIdleRef.current += (idleEndMs - idleStartAtRef.current) / 1000
-        }
-        const nowHour = new Date().getHours()
-        restroomCurrentHourRef.current = nowHour
-        usedRestRoomSecsRef.current    = poolByHourRef.current[nowHour] || 0
+        totalIdleRef.current += (Date.now() - idleStartAtRef.current) / 1000
         idleStartAtRef.current = null
       }
       setIdleStartAt(null)
@@ -325,36 +270,6 @@ export default function EmployeeView({ profile, onSignOut, deptSchedule }) {
     return () => clearInterval(id)
   }, [activeSession?.id])
 
-  // Hourly pool reset — checks every minute for wall-clock hour boundary crossing
-  useEffect(() => {
-    if (!activeSession) return
-    let lastHour = new Date().getHours()
-    const id = setInterval(() => {
-      const nowHour = new Date().getHours()
-      if (nowHour !== lastHour) {
-        lastHour = nowHour
-        restroomCurrentHourRef.current = nowHour
-        usedRestRoomSecsRef.current = 0
-        supabase.from('work_sessions')
-          .update({ used_restroom_secs: 0, restroom_hour_index: nowHour })
-          .eq('id', activeSession.id)
-          .then(() => {})
-        if (activityBcRef.current) {
-          activityBcRef.current.send({
-            type: 'broadcast', event: 'status',
-            payload: {
-              employee_id: fresh.id,
-              is_idle: trackingStateRef.current.isIdle,
-              break_status: trackingStateRef.current.breakStatus,
-              ts: new Date().toISOString(),
-            },
-          }).catch(() => {})
-        }
-      }
-    }, 60 * 1000)
-    return () => clearInterval(id)
-  }, [activeSession?.id])
-
   // Supabase broadcast channel for admin visibility (set up when clocked in)
   useEffect(() => {
     if (!activeSession || !fresh.id) return
@@ -451,7 +366,6 @@ export default function EmployeeView({ profile, onSignOut, deptSchedule }) {
     let finalBreakSecs = totalBreakRef.current
     let finalUnpaidSecs = totalUnpaidBreakRef.current
     let finalBreakCount = breakCountRef.current
-    let finalRestRoomSecs = usedRestRoomSecsRef.current
     let pendingBreakLog = null
     const clockOutMs = Date.now()
     if (breakStartAtRef.current !== null) {
@@ -466,7 +380,6 @@ export default function EmployeeView({ profile, onSignOut, deptSchedule }) {
       finalBreakSecs += dur
       finalUnpaidSecs += Math.max(0, dur - currentBreakAllowanceRef.current)
       if (breakStatus === 'break') finalBreakCount += 1
-      else if (breakStatus === 'restroom') finalRestRoomSecs += Math.min(dur, currentBreakAllowanceRef.current)
       else if (breakStatus === 'lunch') lunchUsedRef.current = true
       breakStartAtRef.current = null
     }
@@ -490,8 +403,6 @@ export default function EmployeeView({ profile, onSignOut, deptSchedule }) {
       accumulated_break_secs: finalBreakSecs,
       accumulated_unpaid_break_secs: finalUnpaidSecs,
       break_count: finalBreakCount,
-      used_restroom_secs: finalRestRoomSecs,
-      restroom_hour_index: restroomCurrentHourRef.current,
       lunch_used: lunchUsedRef.current,
     }).eq('id', activeSession.id)
     const { data: durationHours } = await supabase.rpc('clock_out_session', {
@@ -508,7 +419,6 @@ export default function EmployeeView({ profile, onSignOut, deptSchedule }) {
     totalUnpaidBreakRef.current = 0
     breakCountRef.current = 0
     setBreakCount(0)
-    usedRestRoomSecsRef.current = 0
     lunchUsedRef.current = false
     setLunchUsed(false)
     salaryStartAtRef.current = null
@@ -517,19 +427,8 @@ export default function EmployeeView({ profile, onSignOut, deptSchedule }) {
   }
 
   function handleContinueWorking() {
-    // Finalize idle period immediately on button click (don't wait for IPC user-active)
     if (idleStartAtRef.current !== null) {
-      const idleEndMs = Date.now()
-      if (salaryStartAtRef.current !== null) {
-        const { unpaidSecs, poolUpdates } = computeIdleSplit(idleStartAtRef.current, idleEndMs, poolByHourRef.current)
-        totalIdleRef.current += unpaidSecs
-        Object.assign(poolByHourRef.current, poolUpdates)
-      } else {
-        totalIdleRef.current += (idleEndMs - idleStartAtRef.current) / 1000
-      }
-      const nowHour = new Date().getHours()
-      restroomCurrentHourRef.current = nowHour
-      usedRestRoomSecsRef.current    = poolByHourRef.current[nowHour] || 0
+      totalIdleRef.current += (Date.now() - idleStartAtRef.current) / 1000
       idleStartAtRef.current = null
     }
     setIdleStartAt(null)
@@ -539,15 +438,11 @@ export default function EmployeeView({ profile, onSignOut, deptSchedule }) {
   function startBreak(type) {
     if (!activeSession || breakStatus) return
     // Compute paid allowance for this break type:
-    // - restroom: 5 min per completed elapsed hour, minus already-used restroom time
+    // - restroom: fully unpaid (salary paused for full duration)
     // - break:    20 min flat — 1 paid break per session
     // - lunch:    20 min flat — 1 paid lunch per session
     let allowance = 0
-    if (type === 'restroom') {
-      const currentHour = new Date().getHours()
-      restroomCurrentHourRef.current = currentHour
-      allowance = Math.max(0, 5 * 60 - (poolByHourRef.current[currentHour] || 0))
-    } else if (type === 'break') {
+    if (type === 'break') {
       allowance = breakCountRef.current < 1 ? 20 * 60 : 0
     } else if (type === 'lunch') {
       allowance = !lunchUsedRef.current ? 20 * 60 : 0
@@ -583,11 +478,7 @@ export default function EmployeeView({ profile, onSignOut, deptSchedule }) {
     totalUnpaidBreakRef.current += unpaid
 
     const prevStatus = breakStatus
-    if (prevStatus === 'restroom') {
-      const breakHour = restroomCurrentHourRef.current
-      poolByHourRef.current[breakHour] = (poolByHourRef.current[breakHour] || 0) + paidSecs
-      usedRestRoomSecsRef.current = poolByHourRef.current[breakHour]
-    } else if (prevStatus === 'break') {
+    if (prevStatus === 'break') {
       breakCountRef.current += 1
       setBreakCount(breakCountRef.current)
     } else if (prevStatus === 'lunch') {
@@ -621,8 +512,6 @@ export default function EmployeeView({ profile, onSignOut, deptSchedule }) {
         accumulated_break_secs: totalBreakRef.current,
         accumulated_unpaid_break_secs: totalUnpaidBreakRef.current,
         break_count: breakCountRef.current,
-        used_restroom_secs: usedRestRoomSecsRef.current,
-        restroom_hour_index: restroomCurrentHourRef.current,
         lunch_used: lunchUsedRef.current,
       })
       .eq('id', activeSession.id)
@@ -634,21 +523,12 @@ export default function EmployeeView({ profile, onSignOut, deptSchedule }) {
   const rate = Number(fresh.hourly_rate) || 0
   const totalHours = Number(fresh.hours_worked) || 0
 
-  // Activity-adjusted values — only UNPAID idle is deducted from activeSecs.
-  // Idle time covered by the 5-min/hour pool is still counted as paid work time.
+  // All idle time is unpaid — deducted directly from activeSecs
   const currentIdleContrib = idleStartAtRef.current !== null
     ? (Date.now() - idleStartAtRef.current) / 1000 : 0
-  const currentUnpaidIdleContrib = idleStartAtRef.current !== null
-    ? computeIdleSplit(idleStartAtRef.current, Date.now(), poolByHourRef.current).unpaidSecs
-    : 0
-  const effectiveIdleSecs = totalIdleRef.current + currentUnpaidIdleContrib
+  const effectiveIdleSecs = totalIdleRef.current + currentIdleContrib
   const activeSecs = Math.max(0, elapsed - effectiveIdleSecs)
   const activityPct = elapsed > 30 ? Math.round((activeSecs / elapsed) * 100) : 100
-
-  // Hourly free-time pool state (for display) — use wall-clock hour, not session-relative hour
-  const currentHour      = new Date().getHours()
-  const poolUsedThisHour = poolByHourRef.current[currentHour] || 0
-  const poolRemainingThisHour = Math.max(0, 5 * 60 - poolUsedThisHour)
 
   const h = Math.floor(activeSecs / 3600)
   const m = Math.floor((activeSecs % 3600) / 60)
@@ -755,8 +635,6 @@ export default function EmployeeView({ profile, onSignOut, deptSchedule }) {
             currentBreakAllowance={currentBreakAllowance}
             startBreak={startBreak}
             endBreak={endBreak}
-            poolUsedThisHour={poolUsedThisHour}
-            poolRemainingThisHour={poolRemainingThisHour}
           />
         )}
 
@@ -845,7 +723,7 @@ function BreakTimer({ breakStartAt, breakStatus, paidAllowanceSecs }) {
 }
 
 // ── Dashboard ────────────────────────────────────────────────────────────────
-function DashboardPanel({ fresh, activeSession, elapsed, h, m, s, rate, totalHours, clocking, clockIn, clockOut, isIdle, activityPct, activeSecs, breakStatus, breakStartAt, breakCount, lunchUsed, salaryStartAt, workEndMs, currentBreakAllowance, startBreak, endBreak, poolUsedThisHour, poolRemainingThisHour }) {
+function DashboardPanel({ fresh, activeSession, elapsed, h, m, s, rate, totalHours, clocking, clockIn, clockOut, isIdle, activityPct, activeSecs, breakStatus, breakStartAt, breakCount, lunchUsed, salaryStartAt, workEndMs, currentBreakAllowance, startBreak, endBreak }) {
   const now            = Date.now()
   const waitingForWork = activeSession && elapsed === 0 && salaryStartAt && salaryStartAt > now
   const salaryEnded    = activeSession && workEndMs && now > workEndMs
@@ -997,39 +875,6 @@ function DashboardPanel({ fresh, activeSession, elapsed, h, m, s, rate, totalHou
           <span className="ev-stat-value">{totalHours.toFixed(2)}h</span>
         </div>
       </div>
-
-      {/* Free-time pool this hour */}
-      {activeSession && (
-        <div className="activity-bar-wrap" style={{ marginTop: 10 }}>
-          {(() => {
-            const poolPct   = Math.min(100, (poolUsedThisHour / (5 * 60)) * 100)
-            const prMins    = Math.floor(poolRemainingThisHour / 60)
-            const prSecs    = poolRemainingThisHour % 60
-            const poolColor = poolPct >= 100 ? 'var(--negative)' : poolPct >= 80 ? '#f59e0b' : 'var(--positive)'
-            return (
-              <>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: 'var(--text-muted)', marginBottom: 4 }}>
-                  <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                    🕐 Free time this hour
-                  </span>
-                  <span style={{ color: poolColor, fontWeight: 600 }}>
-                    {poolPct >= 100
-                      ? 'Used up — resumes next hour'
-                      : `${prMins}:${String(prSecs).padStart(2, '0')} remaining`}
-                  </span>
-                </div>
-                <div className="activity-track">
-                  <div className="activity-fill" style={{ width: `${poolPct}%`, background: poolColor }} />
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
-                  <span>{Math.floor(poolUsedThisHour / 60)}m {Math.floor(poolUsedThisHour % 60)}s used of 5m/hr</span>
-                  <span style={{ color: 'var(--text-muted)' }}>idle + restroom combined</span>
-                </div>
-              </>
-            )
-          })()}
-        </div>
-      )}
 
       {activeSession && elapsed > 30 && (
         <div className="activity-bar-wrap">

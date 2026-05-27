@@ -485,11 +485,7 @@ ipcMain.handle('capture-screen', async () => {
       const buf = await new Promise(resolve =>
         setImmediate(() => {
           try {
-            const { width, height } = sources[i].thumbnail.getSize()
-            const raw = sources[i].thumbnail.toBitmap()       // raw RGBA, in-process only
-            const blurred = blurBitmap(raw, width, height)    // obfuscate before encoding
-            const safe = nativeImage.createFromBitmap(blurred, { width, height })
-            resolve(safe.toJPEG(60))                          // only the blurred JPEG leaves
+            resolve(sources[i].thumbnail.toJPEG(60))
           } catch { resolve(null) }
         })
       )
