@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { supabase } from './lib/supabase'
-import { Monitor, Users, Settings2, BarChart3, LogOut, Download, X, RotateCcw, LayoutDashboard, UserCheck } from 'lucide-react'
+import * as avatarCache from './lib/avatarCache'
+import { Monitor, Users, Settings2, BarChart3, LogOut, Download, X, RotateCcw, LayoutDashboard, UserCheck, Timer, ChevronLeft, UserCircle2 } from 'lucide-react'
 import AuthScreen from './components/AuthScreen'
 import EmployeeTable from './components/EmployeeTable'
 import AdminPanel from './components/AdminPanel'
@@ -9,6 +10,7 @@ import SalaryReport from './components/SalaryReport'
 import CompleteProfile from './components/CompleteProfile'
 import AdminDashboard from './components/AdminDashboard'
 import MyTeam from './components/MyTeam'
+import ProfilePanel from './components/ProfilePanel'
 
 const ADMIN_NAV = [
   { id: 'dashboard', label: 'Dashboard',    icon: <LayoutDashboard size={15} /> },
@@ -16,6 +18,7 @@ const ADMIN_NAV = [
   { id: 'employees', label: 'Employees',    icon: <Users size={15} /> },
   { id: 'admin',     label: 'Admin Panel',  icon: <Settings2 size={15} /> },
   { id: 'salary',    label: 'Salary Report',icon: <BarChart3 size={15} /> },
+  { id: 'profile',   label: 'My Profile',   icon: <UserCircle2 size={15} /> },
 ]
 
 function UpdateBanner({ state, progress, version, onRestart, onDismiss }) {
@@ -66,14 +69,19 @@ export default function App() {
   const [session, setSession] = useState(null)
   const [profile, setProfile] = useState(null)
   const [departments, setDepartments] = useState([])
+  const [deptSchedules, setDeptSchedules] = useState({}) // { deptName: { clock_in_open, work_start } }
   const [loading, setLoading] = useState(true)
   const [activeTab, setActiveTab] = useState('dashboard')
+  const [workerMode, setWorkerMode] = useState(false) // sub-admin can switch to their own worker screen
   const [updateState, setUpdateState] = useState(null) // null | 'downloading' | 'ready'
   const [updateProgress, setUpdateProgress] = useState(0)
   const [updateVersion, setUpdateVersion] = useState('')
   const [appVersion, setAppVersion] = useState('')
 
   useEffect(() => {
+    // Load disk-cached avatars into memory immediately — before auth resolves
+    avatarCache.init()
+
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session)
       if (session) init(session.user.id)
@@ -120,11 +128,23 @@ export default function App() {
   async function init(userId) {
     const [{ data: profileData }, { data: deptsData }] = await Promise.all([
       supabase.from('profiles').select('*').eq('id', userId).single(),
-      supabase.from('departments').select('name').order('name'),
+      supabase.from('departments').select('*').order('name'),
     ])
     if (profileData) setProfile(profileData)
-    if (deptsData) setDepartments(deptsData.map(d => d.name))
+    if (deptsData) {
+      setDepartments(deptsData.map(d => d.name))
+      const sched = {}
+      deptsData.forEach(d => { sched[d.name] = { work_start: d.work_start || '09:00', work_end: d.work_end || '19:00' } })
+      setDeptSchedules(sched)
+    }
     setLoading(false)
+
+    // Background: prefetch all user avatars so they render instantly everywhere
+    supabase
+      .from('profiles')
+      .select('id, avatar_url')
+      .not('avatar_url', 'is', null)
+      .then(({ data }) => { if (data?.length) avatarCache.prefetch(data) })
   }
 
   async function handleSignOut() {
@@ -155,7 +175,7 @@ export default function App() {
   if (!isAnyAdmin) {
     return (
       <div className="app" style={{ overflow: 'hidden' }}>
-        <EmployeeView profile={profile} onSignOut={handleSignOut} />
+        <EmployeeView profile={profile} onSignOut={handleSignOut} deptSchedule={deptSchedules[profile?.department]} />
         {updateState && <UpdateBanner state={updateState} progress={updateProgress} version={updateVersion} onRestart={() => window.electronAPI?.installUpdate()} onDismiss={() => setUpdateState(null)} />}
       </div>
     )
@@ -163,6 +183,31 @@ export default function App() {
 
   const roleBadgeLabel = isSuperAdmin ? 'CEO' : 'Sub-Admin'
   const roleBadgeClass = isSuperAdmin ? 'role-admin' : 'role-subadmin'
+
+  // Sub-admin switched to their own worker/timer screen
+  if (isSubAdmin && workerMode) {
+    return (
+      <div className="app" style={{ overflow: 'hidden' }}>
+        <EmployeeView profile={profile} onSignOut={handleSignOut} deptSchedule={deptSchedules[profile?.department]} />
+        {/* Floating button to return to admin panel */}
+        <button
+          onClick={() => setWorkerMode(false)}
+          style={{
+            position: 'fixed', top: 12, right: 12, zIndex: 9999,
+            display: 'flex', alignItems: 'center', gap: 6,
+            background: '#6366f1', color: '#fff', border: 'none',
+            borderRadius: 7, padding: '7px 13px', fontSize: 12,
+            fontWeight: 600, cursor: 'pointer', boxShadow: '0 2px 8px #6366f140',
+          }}
+          title="Back to Admin Panel"
+        >
+          <ChevronLeft size={14} />
+          Admin Panel
+        </button>
+        {updateState && <UpdateBanner state={updateState} progress={updateProgress} version={updateVersion} onRestart={() => window.electronAPI?.installUpdate()} onDismiss={() => setUpdateState(null)} />}
+      </div>
+    )
+  }
 
   return (
     <div className="admin-shell">
@@ -189,6 +234,17 @@ export default function App() {
               {item.label}
             </button>
           ))}
+          {/* Sub-admins are also workers — give them access to their own timer */}
+          {isSubAdmin && (
+            <button
+              className="admin-sb-item"
+              onClick={() => setWorkerMode(true)}
+              title="Switch to your worker / clock-in screen"
+            >
+              <Timer size={15} />
+              My Work
+            </button>
+          )}
         </nav>
 
         {appVersion && <div className="admin-sb-version">v{appVersion}</div>}
@@ -213,7 +269,12 @@ export default function App() {
         {activeTab === 'myteam'     && <MyTeam managedDept={managedDept} />}
         {activeTab === 'employees'  && <main className="app-main"><EmployeeTable departments={departments} managedDept={managedDept} /></main>}
         {activeTab === 'salary'     && <main className="app-main"><SalaryReport managedDept={managedDept} /></main>}
-        {activeTab === 'admin'      && <main className="app-main"><AdminPanel departments={departments} onDepartmentsChange={setDepartments} currentUserId={profile?.id} isSuperAdmin={isSuperAdmin} managedDept={managedDept} /></main>}
+        {activeTab === 'admin'      && <main className="app-main"><AdminPanel departments={departments} onDepartmentsChange={setDepartments} deptSchedules={deptSchedules} onSchedulesChange={setDeptSchedules} currentUserId={profile?.id} isSuperAdmin={isSuperAdmin} managedDept={managedDept} /></main>}
+        {activeTab === 'profile'    && (
+          <div style={{ flex: 1, overflowY: 'auto', minWidth: 0 }}>
+            <ProfilePanel profile={profile} onUpdate={setProfile} />
+          </div>
+        )}
       </div>
 
       {updateState && <UpdateBanner state={updateState} progress={updateProgress} version={updateVersion} onRestart={() => window.electronAPI?.installUpdate()} onDismiss={() => setUpdateState(null)} />}

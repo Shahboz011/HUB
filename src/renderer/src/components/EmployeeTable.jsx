@@ -4,6 +4,7 @@ import AutoSizer from 'react-virtualized-auto-sizer'
 import { Search, History } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import AttendanceView from './AttendanceView'
+import UserAvatar from './UserAvatar'
 
 const DEPT_COLORS = [
   '#6366f1','#8b5cf6','#ec4899','#f59e0b','#10b981',
@@ -35,13 +36,16 @@ function sessionElapsed(startedAt) {
   return `${m}m ${String(s).padStart(2, '0')}s`
 }
 
-function AvatarBadge({ name, department }) {
-  const color = deptColor(department)
-  const initials = name ? name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase() : '?'
+function AvatarBadge({ emp }) {
+  const color = deptColor(emp.department)
   return (
-    <div className="avatar-badge" style={{ backgroundColor: color + '18', border: `1.5px solid ${color}40`, color }}>
-      {initials}
-    </div>
+    <UserAvatar
+      userId={emp.id}
+      name={emp.full_name}
+      avatarUrl={emp.avatar_url}
+      className="avatar-badge"
+      style={{ backgroundColor: color + '18', border: `1.5px solid ${color}40`, color }}
+    />
   )
 }
 
@@ -71,7 +75,7 @@ function TableRow({ index, style, data }) {
       <div className="col col-index">{index + 1}</div>
 
       <div className="col col-employee">
-        <AvatarBadge name={emp.full_name} department={emp.department} />
+        <AvatarBadge emp={emp} />
         <div className="employee-info">
           <span className="employee-name">{emp.full_name || '—'}</span>
           <span className="employee-id">{emp.email}</span>

@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Users, Award, Search } from 'lucide-react'
 import { supabase } from '../lib/supabase'
+import UserAvatar from './UserAvatar'
 
 const DEPT_COLORS = [
   '#6366f1','#8b5cf6','#ec4899','#f59e0b','#10b981',
@@ -18,15 +19,17 @@ function initials(name) {
 }
 function getStatus(empId, activeSessions, activityMap) {
   const session = activeSessions[empId]
-  if (!session) return { type: 'offline', label: 'Offline' }
+  if (!session) return { type: 'offline', label: 'Offline', startedAt: null }
   const live = activityMap[empId]
   const breakStatus = live ? live.break_status : session.break_status
   const isIdle      = live ? live.is_idle      : session.is_idle
-  if (breakStatus === 'break')    return { type: 'break',    label: 'On Break'    }
-  if (breakStatus === 'restroom') return { type: 'restroom', label: 'Rest Room'   }
-  if (breakStatus === 'lunch')    return { type: 'lunch',    label: 'Lunch Break' }
-  if (isIdle)                     return { type: 'idle',     label: 'Idle'        }
-  return { type: 'working', label: 'Working' }
+  const breakStart  = session.break_started_at || (live?.ts ?? null)
+  const idleStart   = session.idle_started_at  || (live?.ts ?? null)
+  if (breakStatus === 'break')    return { type: 'break',    label: 'On Break',    startedAt: breakStart }
+  if (breakStatus === 'restroom') return { type: 'restroom', label: 'Rest Room',   startedAt: breakStart }
+  if (breakStatus === 'lunch')    return { type: 'lunch',    label: 'Lunch Break', startedAt: breakStart }
+  if (isIdle)                     return { type: 'idle',     label: 'Idle',        startedAt: idleStart  }
+  return { type: 'working', label: 'Working', startedAt: session.started_at }
 }
 const STATUS_STYLE = {
   working:  { bg: '#d1fae5', color: '#059669', dot: '#059669' },
@@ -36,13 +39,34 @@ const STATUS_STYLE = {
   idle:     { bg: '#fef3c7', color: '#d97706', dot: '#f59e0b' },
   offline:  { bg: '#f1f5f9', color: '#94a3b8', dot: '#cbd5e1' },
 }
-function StatusBadge({ type, label }) {
+
+function elapsedShort(startedAt) {
+  if (!startedAt) return ''
+  const t = typeof startedAt === 'number' ? startedAt : new Date(startedAt).getTime()
+  const secs = Math.max(0, Math.floor((Date.now() - t) / 1000))
+  const h = Math.floor(secs / 3600)
+  const m = Math.floor((secs % 3600) / 60)
+  const s = Math.floor(secs % 60)
+  if (h > 0) return `${h}h ${m}m`
+  if (m > 0) return `${m}m ${String(s).padStart(2, '0')}s`
+  return `${s}s`
+}
+
+function StatusBadge({ type, label, startedAt }) {
   const c = STATUS_STYLE[type] || STATUS_STYLE.offline
+  const showDur = startedAt && type !== 'working' && type !== 'offline'
   return (
-    <span className="adash-status-badge" style={{ background: c.bg, color: c.color }}>
-      <span className="adash-status-dot" style={{ background: c.dot }} />
-      {label}
-    </span>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 3, alignItems: 'flex-start' }}>
+      <span className="adash-status-badge" style={{ background: c.bg, color: c.color }}>
+        <span className="adash-status-dot" style={{ background: c.dot }} />
+        {label}
+      </span>
+      {showDur && (
+        <span style={{ fontSize: 10, color: c.color, opacity: 0.85, paddingLeft: 3, fontVariantNumeric: 'tabular-nums', fontWeight: 600 }}>
+          for {elapsedShort(startedAt)}
+        </span>
+      )}
+    </div>
   )
 }
 
@@ -283,9 +307,8 @@ export default function MyTeam({ managedDept }) {
                 return (
                   <div key={emp.id} className={`myteam-tr ${i % 2 !== 0 ? 'myteam-tr-alt' : ''}`}>
                     <div className="myteam-td mt-w-emp">
-                      <div className="adash-avatar" style={{ background: color + '18', color, border: `1.5px solid ${color}35` }}>
-                        {initials(emp.full_name)}
-                      </div>
+                      <UserAvatar userId={emp.id} name={emp.full_name} avatarUrl={emp.avatar_url}
+                        className="adash-avatar" style={{ background: color + '18', color, border: `1.5px solid ${color}35` }} />
                       <div className="adash-emp-info">
                         <span className="adash-emp-name">{emp.full_name || '—'}</span>
                         <span className="adash-emp-email">{emp.position || emp.email}</span>
@@ -299,7 +322,7 @@ export default function MyTeam({ managedDept }) {
                     </div>
 
                     <div className="myteam-td mt-w-status">
-                      <StatusBadge type={status.type} label={status.label} />
+                      <StatusBadge type={status.type} label={status.label} startedAt={status.startedAt} />
                     </div>
 
                     <div className="myteam-td mt-w-session adash-mono">
@@ -357,14 +380,20 @@ export default function MyTeam({ managedDept }) {
                   const c      = STATUS_STYLE[status.type]
                   return (
                     <div key={emp.id} className="adash-activity-row">
-                      <div className="adash-act-avatar" style={{ background: color + '18', color, border: `1.5px solid ${color}30` }}>
-                        {initials(emp.full_name)}
-                      </div>
+                      <UserAvatar userId={emp.id} name={emp.full_name} avatarUrl={emp.avatar_url}
+                        className="adash-act-avatar" style={{ background: color + '18', color, border: `1.5px solid ${color}30` }} />
                       <div className="adash-act-info">
                         <span className="adash-act-name">{emp.full_name || emp.email}</span>
                         <span className="adash-act-dept">{emp.department || 'No dept'}</span>
                       </div>
-                      <span style={{ fontSize: 11, fontWeight: 600, color: c.color, flexShrink: 0 }}>{status.label}</span>
+                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', flexShrink: 0 }}>
+                        <span style={{ fontSize: 11, fontWeight: 600, color: c.color }}>{status.label}</span>
+                        {status.startedAt && status.type !== 'working' && status.type !== 'offline' && (
+                          <span style={{ fontSize: 10, color: c.color, opacity: 0.75, fontVariantNumeric: 'tabular-nums', fontWeight: 600, marginTop: 1 }}>
+                            {elapsedShort(status.startedAt)}
+                          </span>
+                        )}
+                      </div>
                     </div>
                   )
                 })}
@@ -385,9 +414,8 @@ export default function MyTeam({ managedDept }) {
                   return (
                     <div key={emp.id} className="myteam-top-row">
                       <span className="myteam-top-rank">{MEDALS[idx]}</span>
-                      <div className="adash-act-avatar" style={{ width: 26, height: 26, minWidth: 26, fontSize: 10, background: color + '18', color, border: `1.5px solid ${color}30` }}>
-                        {initials(emp.full_name)}
-                      </div>
+                      <UserAvatar userId={emp.id} name={emp.full_name} avatarUrl={emp.avatar_url}
+                        className="adash-act-avatar" style={{ width: 26, height: 26, minWidth: 26, fontSize: 10, background: color + '18', color, border: `1.5px solid ${color}30` }} />
                       <span className="myteam-top-name">{emp.full_name || emp.email}</span>
                       <span className="myteam-top-pct" style={{
                         color: pct >= 80 ? '#10b981' : pct >= 50 ? '#f59e0b' : '#ef4444',

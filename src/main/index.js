@@ -2,6 +2,7 @@ const { app, BrowserWindow, shell, ipcMain, clipboard, powerMonitor, screen, nat
 const { join } = require('path')
 const { autoUpdater } = require('electron-updater')
 const https = require('https')
+const fs = require('fs')
 const crypto = require('crypto')
 const { execFile } = require('child_process')
 
@@ -34,6 +35,35 @@ function supabaseAdminPost(path, body) {
       res.on('data', chunk => { data += chunk })
       res.on('end', () => {
         try { resolve({ status: res.statusCode, body: JSON.parse(data) }) }
+        catch { resolve({ status: res.statusCode, body: data }) }
+      })
+    })
+    req.on('error', reject)
+    req.write(payload)
+    req.end()
+  })
+}
+
+function supabaseAdminPatch(path, body) {
+  return new Promise((resolve, reject) => {
+    const payload = JSON.stringify(body)
+    const options = {
+      hostname: SUPABASE_URL,
+      path,
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${SERVICE_KEY}`,
+        'apikey': SERVICE_KEY,
+        'Content-Length': Buffer.byteLength(payload),
+        'Prefer': 'return=minimal',
+      },
+    }
+    const req = https.request(options, (res) => {
+      let data = ''
+      res.on('data', chunk => { data += chunk })
+      res.on('end', () => {
+        try { resolve({ status: res.statusCode, body: data ? JSON.parse(data) : null }) }
         catch { resolve({ status: res.statusCode, body: data }) }
       })
     })
@@ -86,8 +116,159 @@ ipcMain.handle('delete-member', async (_event, { userId }) => {
   return { ok: false, error: `Status ${result.status}` }
 })
 
+// IPC: update department fields (schedule, etc.) with service-role key
+ipcMain.handle('update-department', async (_event, { name, fields }) => {
+  const result = await supabaseAdminPatch(`/rest/v1/departments?name=eq.${encodeURIComponent(name)}`, fields)
+  console.log('[update-department] status:', result.status, 'body:', JSON.stringify(result.body))
+  if (result.status >= 200 && result.status < 300) return { ok: true }
+  return { ok: false, error: `Status ${result.status}: ${JSON.stringify(result.body)}` }
+})
+
+// IPC: update any profile field(s) with service-role key (bypasses RLS)
+// Used for role/department changes that the anon key cannot persist
+ipcMain.handle('update-member', async (_event, { userId, fields }) => {
+  console.log('[update-member] Updating userId:', userId, 'fields:', JSON.stringify(fields))
+  const result = await supabaseAdminPatch(`/rest/v1/profiles?id=eq.${userId}`, fields)
+  console.log('[update-member] Response status:', result.status, 'body:', JSON.stringify(result.body))
+  if (result.status >= 200 && result.status < 300) return { ok: true }
+  return { ok: false, error: `Status ${result.status}: ${JSON.stringify(result.body)}` }
+})
+
 // IPC: get app version
 ipcMain.handle('get-version', () => app.getVersion())
+
+// ── Supabase Storage helpers ──────────────────────────────────────────────────
+function supabaseStoragePut(storagePath, buffer, mimeType) {
+  return new Promise((resolve, reject) => {
+    const options = {
+      hostname: SUPABASE_URL,
+      path: `/storage/v1/object/${storagePath}`,
+      method: 'PUT',
+      headers: {
+        'Content-Type': mimeType,
+        'Authorization': `Bearer ${SERVICE_KEY}`,
+        'apikey': SERVICE_KEY,
+        'Content-Length': buffer.length,
+        'x-upsert': 'true',
+      },
+    }
+    const req = https.request(options, (res) => {
+      let data = ''
+      res.on('data', chunk => { data += chunk })
+      res.on('end', () => {
+        try { resolve({ status: res.statusCode, body: JSON.parse(data) }) }
+        catch { resolve({ status: res.statusCode, body: data }) }
+      })
+    })
+    req.on('error', reject)
+    req.write(buffer)
+    req.end()
+  })
+}
+
+// IPC: upload avatar image to Supabase Storage (service key, bypasses RLS)
+ipcMain.handle('upload-avatar', async (_event, { userId, base64, mimeType }) => {
+  // Ensure the avatars bucket exists (idempotent — ignore "already exists" error)
+  await supabaseAdminPost('/storage/v1/bucket', {
+    id: 'avatars', name: 'avatars', public: true,
+    fileSizeLimit: 5242880,
+    allowedMimeTypes: ['image/jpeg', 'image/png', 'image/webp', 'image/gif'],
+  }).catch(() => {})
+
+  const ext = mimeType === 'image/png' ? 'png' : mimeType === 'image/webp' ? 'webp' : 'jpg'
+  const storagePath = `avatars/${userId}/avatar.${ext}`
+  const buffer = Buffer.from(base64, 'base64')
+  const result = await supabaseStoragePut(storagePath, buffer, mimeType)
+
+  if (result.status >= 200 && result.status < 300) {
+    const publicUrl = `https://${SUPABASE_URL}/storage/v1/object/public/${storagePath}`
+    // Simultaneously write to local disk cache so the image shows instantly next launch
+    try {
+      const dir = avatarCacheDir()
+      fs.mkdirSync(dir, { recursive: true })
+      // Remove any previous file for this user (ext might differ)
+      for (const e of ['jpg', 'png', 'webp']) {
+        const old = join(dir, `${userId}.${e}`)
+        if (fs.existsSync(old)) fs.unlinkSync(old)
+      }
+      fs.writeFileSync(join(dir, `${userId}.${ext}`), buffer)
+    } catch { /* non-fatal */ }
+    const dataUrl = `data:${mimeType};base64,${base64}`
+    return { ok: true, url: publicUrl, dataUrl }
+  }
+  return { ok: false, error: `Status ${result.status}: ${JSON.stringify(result.body)}` }
+})
+
+// ── Local avatar disk cache ───────────────────────────────────────────────────
+// Stored in userData/avatar-cache/{userId}.{ext}
+// Loaded into renderer memory on startup → instant rendering, no network flash.
+
+function avatarCacheDir() {
+  return join(app.getPath('userData'), 'avatar-cache')
+}
+
+// IPC: load all cached avatar files from disk → { [userId]: 'data:image/...;base64,...' }
+ipcMain.handle('avatar:load-cache', async () => {
+  const dir = avatarCacheDir()
+  if (!fs.existsSync(dir)) return {}
+  const result = {}
+  for (const file of fs.readdirSync(dir)) {
+    const m = file.match(/^(.+?)\.(jpg|png|webp)$/)
+    if (!m) continue
+    try {
+      const buf = fs.readFileSync(join(dir, file))
+      const mime = m[2] === 'png' ? 'image/png' : m[2] === 'webp' ? 'image/webp' : 'image/jpeg'
+      result[m[1]] = `data:${mime};base64,${buf.toString('base64')}`
+    } catch { /* skip corrupt files */ }
+  }
+  return result
+})
+
+// IPC: fetch a list of avatars from Supabase and cache to disk
+// Input: [{ userId, url }]  → returns { [userId]: dataUrl } for newly fetched entries
+ipcMain.handle('avatar:fetch-many', async (_event, users) => {
+  const dir = avatarCacheDir()
+  fs.mkdirSync(dir, { recursive: true })
+  const result = {}
+
+  await Promise.all(users.map(({ userId, url }) => new Promise((resolve) => {
+    // Already on disk? Skip (any extension counts)
+    for (const ext of ['jpg', 'png', 'webp']) {
+      if (fs.existsSync(join(dir, `${userId}.${ext}`))) { resolve(); return }
+    }
+    let parsedPath
+    try {
+      const u = new URL(url)
+      parsedPath = u.pathname + (u.search ? u.search : '')
+    } catch { resolve(); return }
+
+    const options = {
+      hostname: SUPABASE_URL,
+      path: parsedPath,
+      method: 'GET',
+      headers: { 'Authorization': `Bearer ${SERVICE_KEY}`, 'apikey': SERVICE_KEY },
+    }
+    const req = https.request(options, (res) => {
+      if (res.statusCode !== 200) { resolve(); return }
+      const contentType = (res.headers['content-type'] || 'image/jpeg').split(';')[0].trim()
+      const ext = contentType === 'image/png' ? 'png' : contentType === 'image/webp' ? 'webp' : 'jpg'
+      const chunks = []
+      res.on('data', c => chunks.push(c))
+      res.on('end', () => {
+        const buf = Buffer.concat(chunks)
+        try {
+          fs.writeFileSync(join(dir, `${userId}.${ext}`), buf)
+          result[userId] = `data:${contentType};base64,${buf.toString('base64')}`
+        } catch { /* disk write failed — no crash */ }
+        resolve()
+      })
+    })
+    req.on('error', () => resolve())
+    req.end()
+  })))
+
+  return result
+})
 
 // IPC: fetch screenshot images as base64 data URLs using service key
 ipcMain.handle('fetch-screenshot-images', async (_event, paths) => {
@@ -270,6 +451,97 @@ ipcMain.handle('install-update', () => {
 let isTracking = false
 ipcMain.handle('set-tracking', (_event, val) => { isTracking = !!val })
 
+// ── Idle popup window ────────────────────────────────────────────────────────
+// A native always-on-top BrowserWindow that appears even when the main app
+// is minimised or in the background. Managed entirely by the main process.
+
+const IDLE_POPUP_HTML = `<!DOCTYPE html><html><head><meta charset="UTF-8">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{
+  font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+  background:#0f172a;color:#e2e8f0;height:100vh;
+  display:flex;align-items:center;justify-content:center;
+  overflow:hidden;user-select:none;
+}
+.card{text-align:center;padding:28px 40px;width:100%}
+.icon{font-size:38px;margin-bottom:10px}
+h1{font-size:17px;font-weight:700;color:#f1f5f9;margin-bottom:6px}
+p{font-size:12px;color:#94a3b8;line-height:1.6;margin-bottom:18px}
+.timer{font-size:34px;font-weight:800;color:#f59e0b;margin-bottom:20px;
+  font-variant-numeric:tabular-nums;letter-spacing:-0.5px}
+.btn{
+  background:#6366f1;color:#fff;border:none;
+  padding:12px 0;border-radius:9px;width:100%;
+  font-size:14px;font-weight:600;cursor:pointer;
+  transition:background .12s,transform .08s;
+}
+.btn:hover{background:#4f46e5}
+.btn:active{transform:scale(.97)}
+.hint{font-size:11px;color:#475569;margin-top:10px;min-height:16px}
+</style></head>
+<body><div class="card">
+  <div class="icon">⏸</div>
+  <h1>Timer Paused</h1>
+  <p>No activity detected for 1 minute.<br>Idle time is not counted as salary.</p>
+  <div class="timer" id="t">0s</div>
+  <button class="btn" id="btn">▶&nbsp; Continue to work?</button>
+  <div class="hint" id="hint">Click anywhere 2 times to resume</div>
+</div>
+<script>
+const {ipcRenderer}=require('electron');
+let clicks=0;
+const startMs=Date.now();
+function fmt(s){
+  const h=Math.floor(s/3600),m=Math.floor((s%3600)/60),sec=s%60;
+  if(h>0)return h+'h '+m+'m';
+  if(m>0)return m+'m '+String(sec).padStart(2,'0')+'s';
+  return sec+'s';
+}
+setInterval(()=>{document.getElementById('t').textContent=fmt(Math.floor((Date.now()-startMs)/1000));},500);
+function resume(){ipcRenderer.send('idle-popup-continue');}
+document.getElementById('btn').addEventListener('click',e=>{e.stopPropagation();resume();});
+document.addEventListener('click',()=>{
+  clicks++;
+  if(clicks>=2){resume();}
+  else{document.getElementById('hint').textContent='Click '+(2-clicks)+' more time to resume';}
+});
+</script></body></html>`
+
+let idlePopupWin = null
+
+function showIdlePopup() {
+  if (idlePopupWin && !idlePopupWin.isDestroyed()) return
+  const { width, height } = screen.getPrimaryDisplay().workAreaSize
+  idlePopupWin = new BrowserWindow({
+    width: 420, height: 240,
+    x: Math.round((width - 420) / 2),
+    y: Math.round((height - 240) / 2),
+    resizable: false, minimizable: false, maximizable: false,
+    alwaysOnTop: true,
+    skipTaskbar: false,
+    title: 'SCC — Timer Paused',
+    autoHideMenuBar: true,
+    webPreferences: { nodeIntegration: true, contextIsolation: false },
+  })
+  idlePopupWin.setAlwaysOnTop(true, 'screen-saver')
+  idlePopupWin.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(IDLE_POPUP_HTML))
+  idlePopupWin.on('closed', () => { idlePopupWin = null })
+}
+
+function closeIdlePopup() {
+  if (idlePopupWin && !idlePopupWin.isDestroyed()) {
+    idlePopupWin.destroy()
+    idlePopupWin = null
+  }
+}
+
+// "Continue to work?" clicked inside the popup → close popup + resume main app
+ipcMain.on('idle-popup-continue', () => {
+  closeIdlePopup()
+  if (win && !win.isDestroyed()) win.webContents.send('user-active')
+})
+
 // ── Activity monitor ────────────────────────────────────────────────────────
 const IDLE_THRESHOLD_SECS = 1 * 60 // 1 minute
 
@@ -285,17 +557,10 @@ function setupActivityMonitor() {
     if (isTracking && idleSecs >= IDLE_THRESHOLD_SECS && !wasIdle) {
       wasIdle = true
       win.webContents.send('user-idle', idleSecs)
-
-      if (Notification.isSupported()) {
-        const n = new Notification({
-          title: 'Salary Command Center — Timer Paused',
-          body: 'No activity for 1 minute. Your work timer has been paused.',
-        })
-        n.on('click', () => { if (win) { win.show(); win.focus() } })
-        n.show()
-      }
+      showIdlePopup()   // native window — visible even when app is minimised
     } else if (wasIdle && idleSecs < 30) {
       wasIdle = false
+      closeIdlePopup()
       win.webContents.send('user-active')
     }
   }, 10 * 1000)

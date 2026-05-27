@@ -1,6 +1,7 @@
-import { useState, useEffect } from 'react'
-import { Users, Wifi, Coffee, WifiOff, TrendingUp } from 'lucide-react'
+import { useState, useEffect, Fragment } from 'react'
+import { Users, Wifi, Coffee, WifiOff, TrendingUp, ChevronDown, ChevronUp } from 'lucide-react'
 import { supabase } from '../lib/supabase'
+import UserAvatar from './UserAvatar'
 
 const NY = 'America/New_York'
 
@@ -23,15 +24,18 @@ function initials(name) {
 
 function getStatus(empId, activeSessions, activityMap) {
   const session = activeSessions[empId]
-  if (!session) return { type: 'offline', label: 'Offline' }
+  if (!session) return { type: 'offline', label: 'Offline', startedAt: null }
   const live = activityMap[empId]
   const breakStatus = live ? live.break_status : session.break_status
-  const isIdle   = live ? live.is_idle  : session.is_idle
-  if (breakStatus === 'break')    return { type: 'break',    label: 'On Break'     }
-  if (breakStatus === 'restroom') return { type: 'restroom', label: 'Rest Room'    }
-  if (breakStatus === 'lunch')    return { type: 'lunch',    label: 'Lunch Break'  }
-  if (isIdle)                     return { type: 'idle',     label: 'Idle'         }
-  return { type: 'working', label: 'Working' }
+  const isIdle      = live ? live.is_idle      : session.is_idle
+  // For timestamps: prefer DB (always accurate, survives refresh) then broadcast ts as fallback
+  const breakStart = session.break_started_at || (live?.ts ?? null)
+  const idleStart  = session.idle_started_at  || (live?.ts ?? null)
+  if (breakStatus === 'break')    return { type: 'break',    label: 'On Break',    startedAt: breakStart }
+  if (breakStatus === 'restroom') return { type: 'restroom', label: 'Rest Room',   startedAt: breakStart }
+  if (breakStatus === 'lunch')    return { type: 'lunch',    label: 'Lunch Break', startedAt: breakStart }
+  if (isIdle)                     return { type: 'idle',     label: 'Idle',        startedAt: idleStart  }
+  return { type: 'working', label: 'Working', startedAt: session.started_at }
 }
 
 const STATUS_STYLE = {
@@ -43,13 +47,128 @@ const STATUS_STYLE = {
   offline:  { bg: '#f1f5f9', color: '#94a3b8', dot: '#cbd5e1' },
 }
 
-function StatusBadge({ type, label }) {
-  const c = STATUS_STYLE[type] || STATUS_STYLE.offline
+// Compact elapsed: "4m 12s" / "1h 23m" — handles both ISO strings and ms timestamps
+function elapsedShort(startedAt) {
+  if (!startedAt) return ''
+  const t = typeof startedAt === 'number' ? startedAt : new Date(startedAt).getTime()
+  const secs = Math.max(0, Math.floor((Date.now() - t) / 1000))
+  const h = Math.floor(secs / 3600)
+  const m = Math.floor((secs % 3600) / 60)
+  const s = Math.floor(secs % 60)
+  if (h > 0) return `${h}h ${m}m`
+  if (m > 0) return `${m}m ${String(s).padStart(2, '0')}s`
+  return `${s}s`
+}
+
+function fmtTime(isoStr) {
+  if (!isoStr) return ''
+  return new Date(isoStr).toLocaleTimeString('en-US', {
+    hour: 'numeric', minute: '2-digit', hour12: true, timeZone: 'America/New_York',
+  })
+}
+
+function fmtDur(totalSecs) {
+  const secs = Math.floor(totalSecs || 0)
+  const m = Math.floor(secs / 60)
+  const s = secs % 60
+  if (m === 0) return `${s}s`
+  if (m < 60) return `${m}m ${String(s).padStart(2, '0')}s`
+  const h = Math.floor(m / 60); const rm = m % 60
+  return `${h}h ${String(rm).padStart(2, '0')}m`
+}
+
+const BREAK_LABELS = { restroom: '🚶 Restroom', break: '☕ Break', lunch: '🍽 Lunch' }
+
+function BreakHistoryRow({ emp, session, breakLogItems }) {
+  const salaryStart = session ? (session.salary_start_at || session.started_at) : null
+  const wallSecs = salaryStart ? (Date.now() - new Date(salaryStart).getTime()) / 1000 : 0
+  const adminCurrentHour = Math.floor(wallSecs / 3600)
+  const sessionHour = Number(session?.restroom_hour_index) || 0
+  // used_restroom_secs is per-hour; only count it if employee's hour index matches current hour
+  const restroomUsedSecs = (session && adminCurrentHour === sessionHour)
+    ? Number(session.used_restroom_secs) || 0 : 0
+  const currentRestroomLive = (session?.break_status === 'restroom' && session?.break_started_at)
+    ? (Date.now() - new Date(session.break_started_at).getTime()) / 1000 : 0
+  const totalRestroomUsed = restroomUsedSecs + currentRestroomLive
+  const pct = Math.min(100, (totalRestroomUsed / (5 * 60)) * 100)
+
   return (
-    <span className="adash-status-badge" style={{ background: c.bg, color: c.color }}>
-      <span className="adash-status-dot" style={{ background: c.dot }} />
-      {label}
-    </span>
+    <div className="adash-break-hist-row">
+      <div className="adash-break-hist-inner">
+        <div className="adash-break-hist-title">
+          Break History — <strong>{emp.full_name || emp.email}</strong>
+          <span className="adash-break-hist-badge">Today</span>
+        </div>
+
+        <div className="adash-break-meter-wrap">
+          <div className="adash-break-meter-head">
+            <span>🚶 Restroom — 5 min / hour (resets each hour)</span>
+            <span style={{ color: pct >= 100 ? '#ef4444' : '#64748b', fontWeight: 600 }}>
+              {session
+                ? `${fmtDur(totalRestroomUsed)} used of 5m this hour`
+                : 'No active session'}
+            </span>
+          </div>
+          {session && (
+            <div className="adash-break-meter-bar">
+              <div className="adash-break-meter-fill" style={{
+                width: `${pct}%`,
+                background: pct >= 100 ? '#ef4444' : pct >= 80 ? '#f59e0b' : '#3b82f6',
+              }} />
+            </div>
+          )}
+        </div>
+
+        {breakLogItems.length === 0 ? (
+          <p className="adash-break-hist-empty">No break events logged today.</p>
+        ) : (
+          <div className="adash-break-hist-list">
+            <div className="adash-break-hist-head">
+              <span className="adash-bhh-time">Time</span>
+              <span className="adash-bhh-type">Type</span>
+              <span className="adash-bhh-dur">Duration</span>
+              <span className="adash-bhh-pay">Pay</span>
+            </div>
+            {breakLogItems.map(evt => {
+              const isFullPaid = Number(evt.paid_secs) >= Number(evt.duration_secs)
+              const isUnpaid = Number(evt.paid_secs) === 0
+              return (
+                <div key={evt.id} className="adash-break-hist-item">
+                  <span className="adash-bhi-time">{fmtTime(evt.started_at)}</span>
+                  <span className={`adash-bhi-type adash-bhi-${evt.break_type}`}>
+                    {BREAK_LABELS[evt.break_type] || evt.break_type}
+                  </span>
+                  <span className="adash-bhi-dur">{fmtDur(evt.duration_secs)}</span>
+                  <span className={`adash-bhi-paid ${isFullPaid ? 'adash-bhi-paid-full' : isUnpaid ? 'adash-bhi-paid-no' : 'adash-bhi-paid-partial'}`}>
+                    {isFullPaid ? '✓ Paid'
+                      : isUnpaid ? 'Unpaid'
+                      : `${fmtDur(evt.paid_secs)} paid`}
+                  </span>
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function StatusBadge({ type, label, startedAt }) {
+  const c = STATUS_STYLE[type] || STATUS_STYLE.offline
+  const showDur = startedAt && type !== 'working' && type !== 'offline'
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 3, alignItems: 'flex-start' }}>
+      <span className="adash-status-badge" style={{ background: c.bg, color: c.color }}>
+        <span className="adash-status-dot" style={{ background: c.dot }} />
+        {label}
+      </span>
+      {showDur && (
+        <span style={{ fontSize: 10, color: c.color, opacity: 0.85, paddingLeft: 3, fontVariantNumeric: 'tabular-nums', fontWeight: 600 }}>
+          for {elapsedShort(startedAt)}
+        </span>
+      )}
+    </div>
   )
 }
 
@@ -74,6 +193,8 @@ export default function AdminDashboard({ adminName, managedDept }) {
   const [employees,     setEmployees]     = useState([])
   const [activeSessions, setActiveSessions] = useState({})
   const [activityMap,   setActivityMap]   = useState({})
+  const [breakLog, setBreakLog] = useState([])
+  const [expandedRow, setExpandedRow] = useState(null)
   const [, setTick] = useState(0)
   const [loading, setLoading] = useState(true)
 
@@ -88,6 +209,12 @@ export default function AdminDashboard({ adminName, managedDept }) {
       }
       setLoading(false)
     })
+
+    const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0)
+    supabase.from('break_log')
+      .select('*').gte('started_at', todayStart.toISOString())
+      .order('started_at', { ascending: true })
+      .then(({ data }) => { if (data) setBreakLog(data) })
 
     const profSub = supabase.channel('adash-profs')
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'profiles' },
@@ -115,6 +242,11 @@ export default function AdminDashboard({ adminName, managedDept }) {
         }}))
       }).subscribe()
 
+    const breakLogSub = supabase.channel('adash-breaklog')
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'break_log' },
+        ({ new: r }) => setBreakLog(prev => [...prev, r]))
+      .subscribe()
+
     const poll = setInterval(async () => {
       const { data } = await supabase.from('work_sessions').select('*').is('ended_at', null)
       if (data) { const m = {}; data.forEach(s => { m[s.employee_id] = s }); setActiveSessions(m) }
@@ -124,6 +256,7 @@ export default function AdminDashboard({ adminName, managedDept }) {
       supabase.removeChannel(profSub)
       supabase.removeChannel(sessSub)
       supabase.removeChannel(actSub)
+      supabase.removeChannel(breakLogSub)
       clearInterval(poll)
     }
   }, [])
@@ -136,6 +269,12 @@ export default function AdminDashboard({ adminName, managedDept }) {
   if (loading) return <div className="adash-loading">Loading dashboard…</div>
 
   const visible = managedDept ? employees.filter(e => e.department === managedDept) : employees
+
+  const breakLogByEmp = {}
+  breakLog.forEach(b => {
+    if (!breakLogByEmp[b.employee_id]) breakLogByEmp[b.employee_id] = []
+    breakLogByEmp[b.employee_id].push(b)
+  })
 
   const workingCount  = visible.filter(e => getStatus(e.id, activeSessions, activityMap).type === 'working').length
   const awayCount     = visible.filter(e => ['break','restroom','lunch','idle'].includes(getStatus(e.id, activeSessions, activityMap).type)).length
@@ -218,43 +357,87 @@ export default function AdminDashboard({ adminName, managedDept }) {
                 const color   = deptColor(emp.department)
                 const pct     = activityPct(session)
                 const breaks  = session ? (Number(session.break_count) || 0) : null
+                const empBreakLog = breakLogByEmp[emp.id] || []
+                const isExpanded  = expandedRow === emp.id
+
+                // Restroom live usage for the inline mini-bar (per-hour model)
+                const salaryStart = session ? (session.salary_start_at || session.started_at) : null
+                const wallSecs = salaryStart ? (Date.now() - new Date(salaryStart).getTime()) / 1000 : 0
+                const adminCurrentHour      = Math.floor(wallSecs / 3600)
+                const sessionHour           = Number(session?.restroom_hour_index) || 0
+                const restroomUsedSecs      = (session && adminCurrentHour === sessionHour)
+                  ? Number(session.used_restroom_secs) || 0 : 0
+                const currentRestroomLive   = (session?.break_status === 'restroom' && session?.break_started_at)
+                  ? (Date.now() - new Date(session.break_started_at).getTime()) / 1000 : 0
+                const totalRestroomUsed = restroomUsedSecs + currentRestroomLive
+                const restroomPct = Math.min(100, (totalRestroomUsed / (5 * 60)) * 100)
 
                 return (
-                  <div key={emp.id} className={`adash-tr ${i % 2 === 0 ? '' : 'adash-tr-alt'}`}>
-                    <div className="adash-td w-emp">
-                      <div className="adash-avatar" style={{ background: color + '18', color, border: `1.5px solid ${color}35` }}>
-                        {initials(emp.full_name)}
-                      </div>
-                      <div className="adash-emp-info">
-                        <span className="adash-emp-name">{emp.full_name || '—'}</span>
-                        <span className="adash-emp-email">{emp.email}</span>
-                      </div>
-                    </div>
-                    <div className="adash-td w-dept">
-                      {emp.department
-                        ? <span className="adash-dept" style={{ background: color + '14', color, border: `1px solid ${color}28` }}>{emp.department}</span>
-                        : <span className="adash-muted">—</span>}
-                    </div>
-                    <div className="adash-td w-status"><StatusBadge type={status.type} label={status.label} /></div>
-                    <div className="adash-td w-time adash-mono">
-                      {session ? elapsed(session.started_at) : <span className="adash-muted">—</span>}
-                    </div>
-                    <div className="adash-td w-breaks">
-                      {breaks !== null
-                        ? <span className={`adash-breaks ${breaks >= 2 ? 'adash-breaks-used' : ''}`}>{breaks}/2</span>
-                        : <span className="adash-muted">—</span>}
-                    </div>
-                    <div className="adash-td w-activity">
-                      {pct !== null ? (
-                        <div className="adash-act-wrap">
-                          <div className="adash-act-bar">
-                            <div className="adash-act-fill" style={{ width: `${pct}%`, background: pct >= 80 ? '#10b981' : pct >= 50 ? '#f59e0b' : '#ef4444' }} />
-                          </div>
-                          <span className="adash-act-pct" style={{ color: pct >= 80 ? '#10b981' : pct >= 50 ? '#f59e0b' : '#ef4444' }}>{pct}%</span>
+                  <Fragment key={emp.id}>
+                    <div className={`adash-tr ${i % 2 === 0 ? '' : 'adash-tr-alt'}${isExpanded ? ' adash-tr-expanded' : ''}`}>
+                      <div className="adash-td w-emp">
+                        <UserAvatar userId={emp.id} name={emp.full_name} avatarUrl={emp.avatar_url}
+                          className="adash-avatar" style={{ background: color + '18', color, border: `1.5px solid ${color}35` }} />
+                        <div className="adash-emp-info">
+                          <span className="adash-emp-name">{emp.full_name || '—'}</span>
+                          <span className="adash-emp-email">{emp.email}</span>
                         </div>
-                      ) : <span className="adash-muted">—</span>}
+                      </div>
+                      <div className="adash-td w-dept">
+                        {emp.department
+                          ? <span className="adash-dept" style={{ background: color + '14', color, border: `1px solid ${color}28` }}>{emp.department}</span>
+                          : <span className="adash-muted">—</span>}
+                      </div>
+                      <div className="adash-td w-status"><StatusBadge type={status.type} label={status.label} startedAt={status.startedAt} /></div>
+                      <div className="adash-td w-time adash-mono">
+                        {session ? elapsed(session.started_at) : <span className="adash-muted">—</span>}
+                      </div>
+                      <div className="adash-td w-breaks">
+                        {session ? (
+                          <div className="adash-breaks-cell">
+                            <>
+                              <div className="adash-restroom-summary">
+                                <span className="adash-restroom-label">Restroom</span>
+                                <span className="adash-restroom-val" style={{ color: restroomPct >= 100 ? '#ef4444' : '#64748b' }}>
+                                  {fmtDur(totalRestroomUsed)}/5m
+                                </span>
+                              </div>
+                              <div className="adash-restroom-mini-bar">
+                                <div className="adash-restroom-mini-fill" style={{
+                                  width: `${restroomPct}%`,
+                                  background: restroomPct >= 100 ? '#ef4444' : restroomPct >= 75 ? '#f59e0b' : '#3b82f6',
+                                }} />
+                              </div>
+                            </>
+                            <div className="adash-breaks-footer">
+                              <span className={`adash-breaks ${breaks >= 2 ? 'adash-breaks-used' : ''}`}>{breaks}/2</span>
+                              <button
+                                className="adash-hist-btn"
+                                onClick={(e) => { e.stopPropagation(); setExpandedRow(isExpanded ? null : emp.id) }}
+                                title={isExpanded ? 'Hide break history' : 'View break history'}
+                              >
+                                {isExpanded ? <ChevronUp size={9} /> : <ChevronDown size={9} />}
+                                {isExpanded ? 'Hide' : 'History'}
+                              </button>
+                            </div>
+                          </div>
+                        ) : <span className="adash-muted">—</span>}
+                      </div>
+                      <div className="adash-td w-activity">
+                        {pct !== null ? (
+                          <div className="adash-act-wrap">
+                            <div className="adash-act-bar">
+                              <div className="adash-act-fill" style={{ width: `${pct}%`, background: pct >= 80 ? '#10b981' : pct >= 50 ? '#f59e0b' : '#ef4444' }} />
+                            </div>
+                            <span className="adash-act-pct" style={{ color: pct >= 80 ? '#10b981' : pct >= 50 ? '#f59e0b' : '#ef4444' }}>{pct}%</span>
+                          </div>
+                        ) : <span className="adash-muted">—</span>}
+                      </div>
                     </div>
-                  </div>
+                    {isExpanded && (
+                      <BreakHistoryRow emp={emp} session={session} breakLogItems={empBreakLog} />
+                    )}
+                  </Fragment>
                 )
               })}
             </div>
@@ -278,14 +461,20 @@ export default function AdminDashboard({ adminName, managedDept }) {
                   const c      = STATUS_STYLE[status.type]
                   return (
                     <div key={emp.id} className="adash-activity-row">
-                      <div className="adash-act-avatar" style={{ background: color + '18', color, border: `1.5px solid ${color}30` }}>
-                        {initials(emp.full_name)}
-                      </div>
+                      <UserAvatar userId={emp.id} name={emp.full_name} avatarUrl={emp.avatar_url}
+                        className="adash-act-avatar" style={{ background: color + '18', color, border: `1.5px solid ${color}30` }} />
                       <div className="adash-act-info">
                         <span className="adash-act-name">{emp.full_name || emp.email}</span>
                         <span className="adash-act-dept">{emp.department || 'No dept'}</span>
                       </div>
-                      <span className="adash-act-status" style={{ color: c.color }}>{status.label}</span>
+                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', flexShrink: 0 }}>
+                        <span className="adash-act-status" style={{ color: c.color }}>{status.label}</span>
+                        {status.startedAt && status.type !== 'working' && status.type !== 'offline' && (
+                          <span style={{ fontSize: 10, color: c.color, opacity: 0.75, fontVariantNumeric: 'tabular-nums', fontWeight: 600, marginTop: 1 }}>
+                            {elapsedShort(status.startedAt)}
+                          </span>
+                        )}
+                      </div>
                     </div>
                   )
                 })}

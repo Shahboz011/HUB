@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { ArrowLeft, ClipboardList, Clock, CalendarDays, DollarSign, PiggyBank, Camera, RefreshCw, XCircle, Trash2, ChevronDown } from 'lucide-react'
 import { supabase } from '../lib/supabase'
+import UserAvatar from './UserAvatar'
 
 const DEPT_COLORS = [
   '#6366f1','#8b5cf6','#ec4899','#f59e0b','#10b981',
@@ -129,9 +130,8 @@ export default function AttendanceView({ employee, onBack }) {
 
       {/* Employee card */}
       <div className="att-emp-card">
-        <div className="att-avatar" style={{ background: color + '18', border: `2px solid ${color}40`, color }}>
-          {initials}
-        </div>
+        <UserAvatar userId={employee.id} name={employee.full_name} avatarUrl={employee.avatar_url}
+          className="att-avatar" style={{ background: color + '18', border: `2px solid ${color}40`, color }} />
         <div className="att-emp-info">
           <h2 className="att-emp-name">{employee.full_name || '—'}</h2>
           <div className="att-emp-meta">

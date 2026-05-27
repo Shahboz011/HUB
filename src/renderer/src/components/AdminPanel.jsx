@@ -1,12 +1,14 @@
 import { useState, useEffect } from 'react'
-import { ArrowLeft, UserPlus, ChevronRight, Trash2, Info, Building2, Users } from 'lucide-react'
+import { ArrowLeft, UserPlus, ChevronRight, Trash2, Clock } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 
 // Safe IPC wrapper — works in Electron; falls back gracefully in browser preview
 const electronAPI = window.electronAPI ?? {
-  inviteMember: async () => ({ ok: false, error: 'Not running in Electron. Please use the desktop app.' }),
-  deleteMember: async () => ({ ok: false, error: 'Not running in Electron. Please use the desktop app.' }),
-  copyToClipboard: async (text) => { try { await navigator.clipboard.writeText(text) } catch {} },
+  inviteMember:     async () => ({ ok: false, error: 'Not running in Electron. Please use the desktop app.' }),
+  deleteMember:     async () => ({ ok: false, error: 'Not running in Electron. Please use the desktop app.' }),
+  updateMember:     async () => ({ ok: false, error: 'Not running in Electron. Please use the desktop app.' }),
+  updateDepartment: async () => ({ ok: false, error: 'Not running in Electron. Please use the desktop app.' }),
+  copyToClipboard:  async (text) => { try { await navigator.clipboard.writeText(text) } catch {} },
 }
 
 function isValidEmail(email) {
@@ -29,8 +31,25 @@ function initials(name) {
 }
 
 // ── Department detail: members + invite ──────────────────────────────────────
-function DeptMembers({ dept, employees, departments, onBack, onEmployeeUpdate, onEmployeeDelete, currentUserId, isSuperAdmin = true }) {
+function DeptMembers({ dept, employees, departments, onBack, onEmployeeUpdate, onEmployeeDelete, currentUserId, isSuperAdmin = true, schedule = null, onScheduleChange }) {
   const [showInvite, setShowInvite] = useState(false)
+  const [workStart,   setWorkStart]   = useState(schedule?.work_start?.slice(0,5) || '09:00')
+  const [workEnd,     setWorkEnd]     = useState(schedule?.work_end?.slice(0,5)   || '19:00')
+  const [schedSaving, setSchedSaving] = useState(false)
+  const [schedMsg,    setSchedMsg]    = useState('')
+
+  async function saveSchedule() {
+    setSchedSaving(true); setSchedMsg('')
+    const result = await electronAPI.updateDepartment({ name: dept, fields: { work_start: workStart, work_end: workEnd } })
+    if (result.ok) {
+      setSchedMsg('✓ Saved')
+      onScheduleChange?.({ work_start: workStart, work_end: workEnd })
+    } else {
+      setSchedMsg('Error: ' + result.error)
+    }
+    setSchedSaving(false)
+    setTimeout(() => setSchedMsg(''), 3000)
+  }
   const [invEmail, setInvEmail] = useState('')
   const [invPosition, setInvPosition] = useState('')
   const [invRate, setInvRate] = useState('')
@@ -108,6 +127,27 @@ function DeptMembers({ dept, employees, departments, onBack, onEmployeeUpdate, o
           <UserPlus size={14} />
           Invite Member
         </button>
+      </div>
+
+      {/* ── Work Schedule ── */}
+      <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 10, padding: '14px 16px', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
+        <Clock size={15} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
+        <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-secondary)', flexShrink: 0 }}>Work Schedule</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <label style={{ fontSize: 12, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>Salary starts</label>
+          <input type="time" value={workStart} onChange={e => setWorkStart(e.target.value)} className="form-input" style={{ width: 120, padding: '4px 8px', fontSize: 13 }} />
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <label style={{ fontSize: 12, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>Salary ends</label>
+          <input type="time" value={workEnd} onChange={e => setWorkEnd(e.target.value)} className="form-input" style={{ width: 120, padding: '4px 8px', fontSize: 13 }} />
+        </div>
+        <button className="dept-add-btn" onClick={saveSchedule} disabled={schedSaving} style={{ padding: '5px 14px', fontSize: 12 }}>
+          {schedSaving ? 'Saving…' : 'Save Schedule'}
+        </button>
+        {schedMsg && <span style={{ fontSize: 12, color: schedMsg.startsWith('✓') ? 'var(--positive)' : 'var(--negative)', fontWeight: 600 }}>{schedMsg}</span>}
+        <span style={{ fontSize: 11, color: 'var(--text-muted)', marginLeft: 'auto' }}>
+          Salary counts from {workStart} → {workEnd}
+        </span>
       </div>
 
       {/* Invite form */}
@@ -239,7 +279,7 @@ function DeptMembers({ dept, employees, departments, onBack, onEmployeeUpdate, o
 }
 
 // ── Main AdminPanel ───────────────────────────────────────────────────────────
-export default function AdminPanel({ departments, onDepartmentsChange, currentUserId, isSuperAdmin = true, managedDept = null }) {
+export default function AdminPanel({ departments, onDepartmentsChange, deptSchedules = {}, onSchedulesChange, currentUserId, isSuperAdmin = true, managedDept = null }) {
   const [activeSection, setActiveSection] = useState('departments')
   const [selectedDept, setSelectedDept] = useState(null)
   const [employees, setEmployees] = useState([])
@@ -309,7 +349,20 @@ export default function AdminPanel({ departments, onDepartmentsChange, currentUs
       ? Number(value) || 0
       : value
     updateLocalEmployee(id, field, parsed)
-    await supabase.from('profiles').update({ [field]: parsed }).eq('id', id)
+    // Use service-key IPC (bypasses RLS) — falls back to anon client if IPC not available
+    if (typeof electronAPI.updateMember === 'function') {
+      const result = await electronAPI.updateMember({ userId: id, fields: { [field]: parsed } })
+      if (!result.ok) {
+        console.error('[updateEmployee] Save failed:', result.error)
+        alert(`Failed to save: ${result.error}`)
+      }
+    } else {
+      const { error } = await supabase.from('profiles').update({ [field]: parsed }).eq('id', id)
+      if (error) {
+        console.error('[updateEmployee] Supabase error:', error)
+        alert(`Failed to save: ${error.message}`)
+      }
+    }
   }
 
   async function sendInvite() {
@@ -370,6 +423,8 @@ export default function AdminPanel({ departments, onDepartmentsChange, currentUs
         onEmployeeUpdate={updateLocalEmployee}
         onEmployeeDelete={removeLocalEmployee}
         currentUserId={currentUserId}
+        schedule={deptSchedules[managedDept]}
+        onScheduleChange={s => onSchedulesChange?.(prev => ({ ...prev, [managedDept]: s }))}
       />
     )
   }
@@ -384,6 +439,8 @@ export default function AdminPanel({ departments, onDepartmentsChange, currentUs
         onEmployeeUpdate={updateLocalEmployee}
         onEmployeeDelete={removeLocalEmployee}
         currentUserId={currentUserId}
+        schedule={deptSchedules[selectedDept]}
+        onScheduleChange={s => onSchedulesChange?.(prev => ({ ...prev, [selectedDept]: s }))}
       />
     )
   }
