@@ -124,6 +124,74 @@ ipcMain.handle('update-department', async (_event, { name, fields }) => {
   return { ok: false, error: `Status ${result.status}: ${JSON.stringify(result.body)}` }
 })
 
+// IPC: insert a transaction row with service-role key (bypasses RLS)
+// Returns { ok, tx } where tx is the inserted row
+ipcMain.handle('insert-transaction', async (_event, { employee_id, type, amount, note }) => {
+  const result = await new Promise((resolve, reject) => {
+    const payload = JSON.stringify({ employee_id, type, amount, note: note || '' })
+    const options = {
+      hostname: SUPABASE_URL,
+      path: '/rest/v1/transactions',
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${SERVICE_KEY}`,
+        'apikey': SERVICE_KEY,
+        'Content-Length': Buffer.byteLength(payload),
+        'Prefer': 'return=representation',
+      },
+    }
+    const req = https.request(options, (res) => {
+      let data = ''
+      res.on('data', chunk => { data += chunk })
+      res.on('end', () => {
+        try { resolve({ status: res.statusCode, body: JSON.parse(data) }) }
+        catch { resolve({ status: res.statusCode, body: data }) }
+      })
+    })
+    req.on('error', reject)
+    req.write(payload)
+    req.end()
+  })
+  if (result.status >= 200 && result.status < 300) {
+    const tx = Array.isArray(result.body) ? result.body[0] : result.body
+    return { ok: true, tx }
+  }
+  return { ok: false, error: `Status ${result.status}: ${JSON.stringify(result.body)}` }
+})
+
+// IPC: delete a transaction row with service-role key (bypasses RLS)
+ipcMain.handle('delete-transaction', async (_event, { txId }) => {
+  const result = await new Promise((resolve, reject) => {
+    const options = {
+      hostname: SUPABASE_URL,
+      path: `/rest/v1/transactions?id=eq.${txId}`,
+      method: 'DELETE',
+      headers: {
+        'Authorization': `Bearer ${SERVICE_KEY}`,
+        'apikey': SERVICE_KEY,
+        'Prefer': 'return=minimal',
+      },
+    }
+    const req = https.request(options, (res) => {
+      let data = ''
+      res.on('data', chunk => { data += chunk })
+      res.on('end', () => resolve({ status: res.statusCode, body: data }))
+    })
+    req.on('error', reject)
+    req.end()
+  })
+  if (result.status >= 200 && result.status < 300) return { ok: true }
+  return { ok: false, error: `Status ${result.status}` }
+})
+
+// IPC: update a transaction row with service-role key (bypasses RLS)
+ipcMain.handle('update-transaction', async (_event, { txId, fields }) => {
+  const result = await supabaseAdminPatch(`/rest/v1/transactions?id=eq.${txId}`, fields)
+  if (result.status >= 200 && result.status < 300) return { ok: true }
+  return { ok: false, error: `Status ${result.status}: ${JSON.stringify(result.body)}` }
+})
+
 // IPC: update any profile field(s) with service-role key (bypasses RLS)
 // Used for role/department changes that the anon key cannot persist
 ipcMain.handle('update-member', async (_event, { userId, fields }) => {

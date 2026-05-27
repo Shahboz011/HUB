@@ -422,11 +422,22 @@ function BonusFineSection({ employee }) {
     const amt = Number(amount)
     if (!amt || amt <= 0) { setError('Enter a valid amount'); return }
     setError(''); setSaving(true)
-    const { data: tx, error: err } = await supabase
-      .from('transactions')
-      .insert({ employee_id: employee.id, type, amount: amt, note: note.trim() })
-      .select().single()
-    if (err) { setError(err.message); setSaving(false); return }
+
+    // Use service-key IPC so sub-admins can write to transactions (bypasses RLS)
+    const ipc = window.electronAPI
+    let tx, errMsg
+    if (ipc?.insertTransaction) {
+      const result = await ipc.insertTransaction({ employee_id: employee.id, type, amount: amt, note: note.trim() })
+      if (!result.ok) { setError(result.error || 'Failed to save'); setSaving(false); return }
+      tx = result.tx
+    } else {
+      const { data, error: err } = await supabase
+        .from('transactions')
+        .insert({ employee_id: employee.id, type, amount: amt, note: note.trim() })
+        .select().single()
+      if (err) { setError(err.message); setSaving(false); return }
+      tx = data
+    }
 
     const field = type === 'bonus' ? 'bonuses' : 'fines'
     const next = { ...localTotals, [field]: localTotals[field] + amt }
@@ -439,7 +450,12 @@ function BonusFineSection({ employee }) {
   }
 
   async function deleteTransaction(tx) {
-    await supabase.from('transactions').delete().eq('id', tx.id)
+    // Use service-key IPC so sub-admins can delete transactions (bypasses RLS)
+    if (window.electronAPI?.deleteTransaction) {
+      await window.electronAPI.deleteTransaction({ txId: tx.id })
+    } else {
+      await supabase.from('transactions').delete().eq('id', tx.id)
+    }
     const field = tx.type === 'bonus' ? 'bonuses' : 'fines'
     const newTotal = Math.max(0, localTotals[field] - tx.amount)
     setLocalTotals(prev => ({ ...prev, [field]: newTotal }))
@@ -483,7 +499,12 @@ function BonusFineSection({ employee }) {
       if (!amt || amt <= 0) return
       const field = tx.type === 'bonus' ? 'bonuses' : 'fines'
       const diff = amt - tx.amount
-      await supabase.from('transactions').update({ amount: amt, note: editNote.trim() }).eq('id', tx.id)
+      // Use service-key IPC so sub-admins can update transactions (bypasses RLS)
+      if (window.electronAPI?.updateTransaction) {
+        await window.electronAPI.updateTransaction({ txId: tx.id, fields: { amount: amt, note: editNote.trim() } })
+      } else {
+        await supabase.from('transactions').update({ amount: amt, note: editNote.trim() }).eq('id', tx.id)
+      }
       const newTotal = Math.max(0, localTotals[field] + diff)
       setLocalTotals(prev => ({ ...prev, [field]: newTotal }))
       await supabase.from('profiles').update({ [field]: newTotal }).eq('id', employee.id)
