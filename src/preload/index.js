@@ -20,6 +20,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onUpdateError: (callback) => ipcRenderer.on('update-error', (_e, msg) => callback(msg)),
   installUpdate: () => ipcRenderer.invoke('install-update'),
   setTracking: (val) => ipcRenderer.invoke('set-tracking', val),
+  setBreakStatus: (val) => ipcRenderer.invoke('set-break-status', val),
   onIdleTick: (cb) => ipcRenderer.on('idle-tick', (_e, secs) => cb(secs)),
   onCursorSample: (cb) => ipcRenderer.on('cursor-sample', (_e, pos) => cb(pos)),
   onUserIdle: (cb) => ipcRenderer.on('user-idle', (_e, secs) => cb(secs)),
@@ -27,4 +28,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getVersion: () => ipcRenderer.invoke('get-version'),
   fetchScreenshotImages: (paths) => ipcRenderer.invoke('fetch-screenshot-images', paths),
   captureScreen: () => ipcRenderer.invoke('capture-screen'),
+  clearEmployeeScreenshots: (data) => ipcRenderer.invoke('clear-employee-screenshots', data),
+  clearEmployeeHistory: (data) => ipcRenderer.invoke('clear-employee-history', data),
 })

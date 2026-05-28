@@ -1,6 +1,7 @@
 import { useState, useEffect, Fragment } from 'react'
 import { Users, Wifi, Coffee, WifiOff, TrendingUp, ChevronDown, ChevronUp } from 'lucide-react'
 import { supabase } from '../lib/supabase'
+import { ServerClockCompact } from './ServerClock'
 import UserAvatar from './UserAvatar'
 import WorkerProfileModal from './WorkerProfileModal'
 
@@ -32,9 +33,10 @@ function getStatus(empId, activeSessions, activityMap) {
   // For timestamps: prefer DB (always accurate, survives refresh) then broadcast ts as fallback
   const breakStart = session.break_started_at || (live?.ts ?? null)
   const idleStart  = session.idle_started_at  || (live?.ts ?? null)
-  if (breakStatus === 'break')    return { type: 'break',    label: 'On Break',    startedAt: breakStart }
+  if (breakStatus === 'break')    return { type: 'break',    label: 'Break/Lunch', startedAt: breakStart }
   if (breakStatus === 'restroom') return { type: 'restroom', label: 'Rest Room',   startedAt: breakStart }
-  if (breakStatus === 'lunch')    return { type: 'lunch',    label: 'Lunch Break', startedAt: breakStart }
+  if (breakStatus === 'pray')     return { type: 'pray',     label: 'Praying',     startedAt: breakStart }
+  if (breakStatus === 'coffee')   return { type: 'coffee',   label: 'Coffee Break',startedAt: breakStart }
   if (isIdle)                     return { type: 'idle',     label: 'Idle',        startedAt: idleStart  }
   return { type: 'working', label: 'Working', startedAt: session.started_at }
 }
@@ -43,7 +45,8 @@ const STATUS_STYLE = {
   working:  { bg: '#d1fae5', color: '#059669', dot: '#059669' },
   break:    { bg: '#dbeafe', color: '#3b82f6', dot: '#3b82f6' },
   restroom: { bg: '#e0f2fe', color: '#0284c7', dot: '#0284c7' },
-  lunch:    { bg: '#ffedd5', color: '#f97316', dot: '#f97316' },
+  pray:     { bg: '#faf5ff', color: '#9333ea', dot: '#a855f7' },
+  coffee:   { bg: '#fef9c3', color: '#ca8a04', dot: '#eab308' },
   idle:     { bg: '#fef3c7', color: '#d97706', dot: '#f59e0b' },
   offline:  { bg: '#f1f5f9', color: '#94a3b8', dot: '#cbd5e1' },
 }
@@ -78,7 +81,7 @@ function fmtDur(totalSecs) {
   return `${h}h ${String(rm).padStart(2, '0')}m`
 }
 
-const BREAK_LABELS = { restroom: '🚶 Restroom', break: '☕ Break', lunch: '🍽 Lunch' }
+const BREAK_LABELS = { break: '🍽 Break/Lunch', restroom: '🚶 Restroom', pray: '🙏 Pray', coffee: '☕ Coffee' }
 
 function BreakHistoryRow({ emp, breakLogItems }) {
   return (
@@ -159,7 +162,7 @@ function activityPct(session) {
   return Math.round((active / wall) * 100)
 }
 
-export default function AdminDashboard({ adminName, managedDept }) {
+export default function AdminDashboard({ adminName, managedDept, hideSalary = false }) {
   const [employees,     setEmployees]     = useState([])
   const [activeSessions, setActiveSessions] = useState({})
   const [activityMap,   setActivityMap]   = useState({})
@@ -258,14 +261,14 @@ export default function AdminDashboard({ adminName, managedDept }) {
   })
 
   const workingCount  = visible.filter(e => getStatus(e.id, activeSessions, activityMap).type === 'working').length
-  const awayCount     = visible.filter(e => ['break','restroom','lunch','idle'].includes(getStatus(e.id, activeSessions, activityMap).type)).length
+  const awayCount     = visible.filter(e => ['break','restroom','pray','coffee','idle'].includes(getStatus(e.id, activeSessions, activityMap).type)).length
   const offlineCount  = visible.filter(e => !activeSessions[e.id]).length
 
   const today = new Date().toLocaleDateString('en-US', {
     weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', timeZone: NY,
   })
 
-  const ORDER = { working: 0, break: 1, restroom: 2, lunch: 3, idle: 4, offline: 5 }
+  const ORDER = { working: 0, break: 1, restroom: 2, lunch: 3, pray: 4, idle: 5, offline: 6 }
   const sorted = [...visible].sort((a, b) =>
     ORDER[getStatus(a.id, activeSessions, activityMap).type] -
     ORDER[getStatus(b.id, activeSessions, activityMap).type]
@@ -279,7 +282,7 @@ export default function AdminDashboard({ adminName, managedDept }) {
           <h2 className="adash-title">Dashboard{managedDept ? ` — ${managedDept}` : ''}</h2>
           <p className="adash-welcome">Welcome back, <strong>{adminName}</strong>! Here's what's happening with your team today.</p>
         </div>
-        <span className="adash-date">{today}</span>
+        <ServerClockCompact />
       </div>
 
       <div className="adash-stats">
@@ -446,7 +449,7 @@ export default function AdminDashboard({ adminName, managedDept }) {
               {[
                 { label: 'Clocked in', value: visible.filter(e => activeSessions[e.id]).length, color: '#10b981' },
                 { label: 'Working', value: workingCount, color: '#059669' },
-                { label: 'On break', value: visible.filter(e => ['break','restroom','lunch'].includes(getStatus(e.id, activeSessions, activityMap).type)).length, color: '#3b82f6' },
+                { label: 'On break', value: visible.filter(e => ['break','restroom','pray','coffee'].includes(getStatus(e.id, activeSessions, activityMap).type)).length, color: '#3b82f6' },
                 { label: 'Idle', value: visible.filter(e => getStatus(e.id, activeSessions, activityMap).type === 'idle').length, color: '#f59e0b' },
                 { label: 'Offline', value: offlineCount, color: '#94a3b8' },
               ].map(({ label, value, color }) => (
@@ -481,6 +484,7 @@ export default function AdminDashboard({ adminName, managedDept }) {
         session={selectedWorker.session}
         status={selectedWorker.status}
         onClose={() => setSelectedWorker(null)}
+        hideSalary={hideSalary}
       />
     )}
     </>

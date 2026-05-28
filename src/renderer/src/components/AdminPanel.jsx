@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
-import { ArrowLeft, UserPlus, ChevronRight, Trash2, Clock } from 'lucide-react'
+import { ArrowLeft, UserPlus, ChevronRight, Trash2, Clock, ShieldAlert } from 'lucide-react'
 import { supabase } from '../lib/supabase'
+import { loadProhibited, saveProhibited, DEFAULT_PROHIBITED } from './ReportsView'
 
 // Safe IPC wrapper — works in Electron; falls back gracefully in browser preview
 const electronAPI = window.electronAPI ?? {
@@ -248,7 +249,7 @@ function DeptMembers({ dept, employees, departments, onBack, onEmployeeUpdate, o
                   <div style={{ display: 'flex', gap: 8, marginTop: 4, flexWrap: 'wrap' }}>
                     {emp.position && <span className="ev-dept-tag" style={{ background: '#6366f115', color: '#6366f1', border: '1px solid #6366f130', fontSize: 11 }}>{emp.position}</span>}
                     <span className="ev-rate-chip" style={{ fontSize: 11 }}>${Number(emp.hourly_rate) || 0}/hr</span>
-                    <span className={`role-badge ${emp.role === 'admin' ? 'role-admin' : 'role-employee'}`} style={{ fontSize: 10 }}>{emp.role}</span>
+                    <span className={`role-badge ${emp.role === 'admin' ? 'role-admin' : emp.role === 'subadmin' ? 'role-subadmin' : emp.role === 'diller' ? 'role-diller' : 'role-employee'}`} style={{ fontSize: 10 }}>{emp.role}</span>
                   </div>
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-end' }}>
@@ -455,6 +456,9 @@ export default function AdminPanel({ departments, onDepartmentsChange, deptSched
           </button>
           <button className={`section-tab ${activeSection === 'members' ? 'active' : ''}`} onClick={() => setActiveSection('members')}>
             Members
+          </button>
+          <button className={`section-tab ${activeSection === 'apprules' ? 'active' : ''}`} onClick={() => setActiveSection('apprules')}>
+            App Rules
           </button>
         </div>
       </div>
@@ -681,20 +685,24 @@ export default function AdminPanel({ departments, onDepartmentsChange, deptSched
                         if (newRole === 'admin' && emp.role !== 'admin') {
                           if (!window.confirm(`Grant full CEO access to ${emp.full_name || emp.email}? They will have access to all departments and data.`)) return
                         }
-                        if (newRole === 'subadmin' && !emp.department) {
-                          window.alert('Assign a department to this user first before making them a Sub-Admin.')
+                        if ((newRole === 'subadmin' || newRole === 'diller') && !emp.department) {
+                          window.alert('Assign a department to this user first before setting this role.')
                           return
                         }
                         if (newRole === 'subadmin') {
                           if (!window.confirm(`Make ${emp.full_name || emp.email} a Sub-Admin for the "${emp.department}" department? They will only see their department.`)) return
                         }
+                        if (newRole === 'diller') {
+                          if (!window.confirm(`Make ${emp.full_name || emp.email} a Diller for the "${emp.department}" department? They will see team status and breaks but no salary data.`)) return
+                        }
                         updateEmployee(emp.id, 'role', newRole)
                       }}
-                      className={`emp-role-select emp-select ${emp.role === 'admin' ? 'role-admin' : emp.role === 'subadmin' ? 'role-subadmin' : 'role-employee'}`}
+                      className={`emp-role-select emp-select ${emp.role === 'admin' ? 'role-admin' : emp.role === 'subadmin' ? 'role-subadmin' : emp.role === 'diller' ? 'role-diller' : 'role-employee'}`}
                       style={{ width: 120 }}
                     >
                       <option value="employee">Employee</option>
                       <option value="subadmin">Sub-Admin</option>
+                      <option value="diller">Diller</option>
                       <option value="admin">CEO / Admin</option>
                     </select>
 
@@ -722,6 +730,107 @@ export default function AdminPanel({ departments, onDepartmentsChange, deptSched
             )}
             {deleteErr && <p className="bf-error" style={{ marginTop: 12 }}>{deleteErr}</p>}
           </div>
+        </div>
+      )}
+
+      {/* ── APP RULES ── */}
+      {activeSection === 'apprules' && <ProhibitedAppsManager />}
+    </div>
+  )
+}
+
+// ── Prohibited Apps Manager ───────────────────────────────────────────────────
+function ProhibitedAppsManager() {
+  const [patterns,    setPatterns]    = useState(loadProhibited)
+  const [newPattern,  setNewPattern]  = useState('')
+  const [newLabel,    setNewLabel]    = useState('')
+  const [saved,       setSaved]       = useState(false)
+
+  function persist(updated) {
+    setPatterns(updated)
+    saveProhibited(updated)
+    setSaved(true)
+    setTimeout(() => setSaved(false), 1800)
+  }
+
+  function add() {
+    const p = newPattern.trim().toLowerCase()
+    if (!p) return
+    if (patterns.some(x => x.pattern === p)) return
+    const label = newLabel.trim() || (p.charAt(0).toUpperCase() + p.slice(1))
+    persist([...patterns, { pattern: p, label }])
+    setNewPattern(''); setNewLabel('')
+  }
+
+  function remove(pattern) {
+    persist(patterns.filter(x => x.pattern !== pattern))
+  }
+
+  function resetDefaults() {
+    persist(DEFAULT_PROHIBITED)
+  }
+
+  return (
+    <div className="dept-manage">
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, marginBottom: 6 }}>
+        <div>
+          <p className="admin-subtitle" style={{ marginBottom: 4 }}>
+            Keywords to flag in screenshots. If a worker's <strong>app name</strong> or <strong>window title</strong> contains any keyword, it shows as a violation in Reports → Violations.
+          </p>
+          <p style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+            Chrome shows the tab title in the window title — so "youtube" will catch any YouTube tab.
+          </p>
+        </div>
+        <button className="dept-remove-btn" onClick={resetDefaults} style={{ fontSize: 12, whiteSpace: 'nowrap', flexShrink: 0 }}>
+          Reset to Defaults
+        </button>
+      </div>
+
+      <div className="dept-add-row" style={{ gap: 8, flexWrap: 'wrap' }}>
+        <input
+          type="text" value={newPattern}
+          onChange={e => setNewPattern(e.target.value)}
+          onKeyDown={e => e.key === 'Enter' && add()}
+          placeholder="Keyword (e.g. youtube)"
+          className="form-input" style={{ flex: 2, minWidth: 140 }}
+        />
+        <input
+          type="text" value={newLabel}
+          onChange={e => setNewLabel(e.target.value)}
+          onKeyDown={e => e.key === 'Enter' && add()}
+          placeholder="Display name (optional)"
+          className="form-input" style={{ flex: 2, minWidth: 140 }}
+        />
+        <button className="dept-add-btn" onClick={add} disabled={!newPattern.trim()}>
+          + Add Rule
+        </button>
+        {saved && <span style={{ fontSize: 12, color: 'var(--positive)', fontWeight: 600 }}>✓ Saved</span>}
+      </div>
+
+      {patterns.length === 0 ? (
+        <div className="empty-state" style={{ height: 'auto', padding: 28, marginTop: 16 }}>
+          <p>No rules configured.</p>
+          <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>Add a keyword above or click Reset to Defaults.</p>
+        </div>
+      ) : (
+        <div className="app-rules-list">
+          <div className="app-rules-head">
+            <span>Display Name</span>
+            <span>Keyword Pattern</span>
+            <span />
+          </div>
+          {patterns.map(({ pattern, label }) => (
+            <div key={pattern} className="app-rules-row">
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <ShieldAlert size={13} style={{ color: '#ef4444', flexShrink: 0 }} />
+                <span style={{ fontWeight: 600, fontSize: 13 }}>{label}</span>
+              </div>
+              <span style={{ fontSize: 12, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>"{pattern}"</span>
+              <button className="dept-remove-btn" onClick={() => remove(pattern)} title="Remove rule">
+                <Trash2 size={12} />
+              </button>
+            </div>
+          ))}
         </div>
       )}
     </div>

@@ -205,6 +205,91 @@ ipcMain.handle('update-member', async (_event, { userId, fields }) => {
 // IPC: get app version
 ipcMain.handle('get-version', () => app.getVersion())
 
+// IPC: delete all screenshots for an employee (storage files + DB records)
+ipcMain.handle('clear-employee-screenshots', async (_event, { userId }) => {
+  // Bulk-delete storage files by prefix
+  try {
+    const payload = JSON.stringify({ prefixes: [`${userId}/`] })
+    await new Promise((resolve) => {
+      const options = {
+        hostname: SUPABASE_URL,
+        path: '/storage/v1/object/delete/screenshots',
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${SERVICE_KEY}`,
+          'apikey': SERVICE_KEY,
+          'Content-Length': Buffer.byteLength(payload),
+        },
+      }
+      const req = https.request(options, (res) => { res.on('data', () => {}); res.on('end', resolve) })
+      req.on('error', resolve)
+      req.write(payload)
+      req.end()
+    })
+  } catch { /* storage cleanup is best-effort */ }
+
+  // Delete DB records
+  const result = await new Promise((resolve, reject) => {
+    const options = {
+      hostname: SUPABASE_URL,
+      path: `/rest/v1/screenshots?employee_id=eq.${userId}`,
+      method: 'DELETE',
+      headers: {
+        'Authorization': `Bearer ${SERVICE_KEY}`,
+        'apikey': SERVICE_KEY,
+        'Prefer': 'return=minimal',
+      },
+    }
+    const req = https.request(options, (res) => {
+      let data = ''; res.on('data', c => { data += c }); res.on('end', () => resolve({ status: res.statusCode }))
+    })
+    req.on('error', reject)
+    req.end()
+  })
+  if (result.status >= 200 && result.status < 300) return { ok: true }
+  return { ok: false, error: `Status ${result.status}` }
+})
+
+// IPC: delete all ended work sessions + break_log, reset hours_worked to 0
+ipcMain.handle('clear-employee-history', async (_event, { userId }) => {
+  // Delete break_log (non-fatal — may be empty)
+  await new Promise((resolve) => {
+    const options = {
+      hostname: SUPABASE_URL,
+      path: `/rest/v1/break_log?employee_id=eq.${userId}`,
+      method: 'DELETE',
+      headers: { 'Authorization': `Bearer ${SERVICE_KEY}`, 'apikey': SERVICE_KEY, 'Prefer': 'return=minimal' },
+    }
+    const req = https.request(options, (res) => { res.on('data', () => {}); res.on('end', resolve) })
+    req.on('error', resolve)
+    req.end()
+  })
+
+  // Delete all ended sessions
+  const sessResult = await new Promise((resolve, reject) => {
+    const options = {
+      hostname: SUPABASE_URL,
+      path: `/rest/v1/work_sessions?employee_id=eq.${userId}&ended_at=not.is.null`,
+      method: 'DELETE',
+      headers: { 'Authorization': `Bearer ${SERVICE_KEY}`, 'apikey': SERVICE_KEY, 'Prefer': 'return=minimal' },
+    }
+    const req = https.request(options, (res) => {
+      let data = ''; res.on('data', c => { data += c }); res.on('end', () => resolve({ status: res.statusCode }))
+    })
+    req.on('error', reject)
+    req.end()
+  })
+
+  // Reset hours_worked to 0 on profile
+  const profileResult = await supabaseAdminPatch(`/rest/v1/profiles?id=eq.${userId}`, { hours_worked: 0 })
+
+  if (sessResult.status >= 200 && sessResult.status < 300 && profileResult.status >= 200 && profileResult.status < 300) {
+    return { ok: true }
+  }
+  return { ok: false, error: `sessions:${sessResult.status} profile:${profileResult.status}` }
+})
+
 // ── Supabase Storage helpers ──────────────────────────────────────────────────
 function supabaseStoragePut(storagePath, buffer, mimeType) {
   return new Promise((resolve, reject) => {
@@ -429,8 +514,9 @@ function blurBitmap(buffer, width, height) {
 }
 
 // ── Active window detection ──────────────────────────────────────────────────
-// Uses Win32 GetForegroundWindow + GetWindowText via PowerShell -EncodedCommand.
-// Runs concurrently with desktopCapturer.getSources; never blocks the blur pipeline.
+// Gets the foreground app name PLUS all visible window titles on the desktop.
+// window_title stores "Active Tab | Other Window | ..." so violation detection
+// can catch background apps (e.g. YouTube open in a background Chrome tab).
 // Fails silently — returns empty strings so screenshots still upload on error.
 function getActiveWindow() {
   return new Promise((resolve) => {
@@ -445,19 +531,25 @@ function getActiveWindow() {
       '  [DllImport("user32.dll")] public static extern int GetWindowThreadProcessId(IntPtr h, out int pid);',
       '}',
       '"@',
+      // Foreground window — app name
       '$h = [Win32]::GetForegroundWindow()',
       '$sb = New-Object System.Text.StringBuilder 512',
       '[Win32]::GetWindowText($h, $sb, 512) | Out-Null',
+      '$activeTitle = $sb.ToString()',
       '$wpid = 0',
       '[Win32]::GetWindowThreadProcessId($h, [ref]$wpid) | Out-Null',
       '$p = Get-Process -Id $wpid -ErrorAction SilentlyContinue',
       "$app = if ($p) { try { $n = $p.MainModule.FileVersionInfo.ProductName; if ($n) { $n } else { $p.ProcessName } } catch { $p.ProcessName } } else { '' }",
+      // All visible windows — catches background tabs (YouTube, Netflix, etc.)
+      '$allTitles = @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowTitle -ne \'\' } | Select-Object -ExpandProperty MainWindowTitle)',
+      '$combined = @($activeTitle) + ($allTitles | Where-Object { $_ -ne $activeTitle }) | Select-Object -Unique',
+      '$joined = $combined -join \' | \'',
       '[Console]::OutputEncoding = [Text.Encoding]::UTF8',
-      "Write-Output (ConvertTo-Json @{ title = $sb.ToString(); app = $app })",
+      'Write-Output (ConvertTo-Json @{ title = $joined; app = $app })',
     ].join('\r\n')
     const enc = Buffer.from(ps, 'utf16le').toString('base64')
     execFile('powershell', ['-NoProfile', '-NonInteractive', '-EncodedCommand', enc],
-      { timeout: 5000, windowsHide: true },
+      { timeout: 8000, windowsHide: true },
       (err, stdout) => {
         if (err || !stdout) { resolve({ active_app: '', window_title: '' }); return }
         try {
@@ -514,6 +606,10 @@ ipcMain.handle('install-update', () => {
 // IPC: employee tells us when they clock in/out so we only notify when tracking
 let isTracking = false
 ipcMain.handle('set-tracking', (_event, val) => { isTracking = !!val })
+
+// IPC: employee tells us when they start/end a break so idle is suppressed during breaks
+let isOnBreak = false
+ipcMain.handle('set-break-status', (_event, val) => { isOnBreak = !!val })
 
 // ── Idle popup window ────────────────────────────────────────────────────────
 // A native always-on-top BrowserWindow that appears even when the main app
@@ -618,11 +714,11 @@ function setupActivityMonitor() {
     win.webContents.send('idle-tick', idleSecs)
     win.webContents.send('cursor-sample', screen.getCursorScreenPoint())
 
-    if (isTracking && idleSecs >= IDLE_THRESHOLD_SECS && !wasIdle) {
+    if (isTracking && !isOnBreak && idleSecs >= IDLE_THRESHOLD_SECS && !wasIdle) {
       wasIdle = true
       win.webContents.send('user-idle', idleSecs)
       showIdlePopup()   // native window — visible even when app is minimised
-    } else if (wasIdle && idleSecs < IDLE_THRESHOLD_SECS) {
+    } else if (wasIdle && (idleSecs < IDLE_THRESHOLD_SECS || isOnBreak)) {
       wasIdle = false
       closeIdlePopup()
       win.webContents.send('user-active')

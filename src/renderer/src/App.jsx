@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { supabase } from './lib/supabase'
 import * as avatarCache from './lib/avatarCache'
-import { Monitor, Users, Settings2, BarChart3, LogOut, Download, X, RotateCcw, LayoutDashboard, UserCheck, Timer, ChevronLeft, UserCircle2 } from 'lucide-react'
+import { Monitor, Users, Settings2, BarChart3, LogOut, Download, X, RotateCcw, LayoutDashboard, UserCheck, Timer, ChevronLeft, UserCircle2, ClipboardList } from 'lucide-react'
 import AuthScreen from './components/AuthScreen'
 import EmployeeTable from './components/EmployeeTable'
 import AdminPanel from './components/AdminPanel'
@@ -11,11 +11,13 @@ import CompleteProfile from './components/CompleteProfile'
 import AdminDashboard from './components/AdminDashboard'
 import MyTeam from './components/MyTeam'
 import ProfilePanel from './components/ProfilePanel'
+import ReportsView from './components/ReportsView'
 
 const ADMIN_NAV = [
   { id: 'dashboard', label: 'Dashboard',    icon: <LayoutDashboard size={15} /> },
   { id: 'myteam',    label: 'My Team',      icon: <UserCheck size={15} /> },
   { id: 'employees', label: 'Employees',    icon: <Users size={15} /> },
+  { id: 'reports',   label: 'Reports',      icon: <ClipboardList size={15} /> },
   { id: 'admin',     label: 'Admin Panel',  icon: <Settings2 size={15} /> },
   { id: 'salary',    label: 'Salary Report',icon: <BarChart3 size={15} /> },
   { id: 'profile',   label: 'My Profile',   icon: <UserCircle2 size={15} /> },
@@ -167,8 +169,9 @@ export default function App() {
 
   const isSuperAdmin = profile?.role === 'admin'
   const isSubAdmin   = profile?.role === 'subadmin'
-  const isAnyAdmin   = isSuperAdmin || isSubAdmin
-  const managedDept  = isSubAdmin ? (profile?.department || null) : null
+  const isDiller     = profile?.role === 'diller'
+  const isAnyAdmin   = isSuperAdmin || isSubAdmin || isDiller
+  const managedDept  = (isSubAdmin || isDiller) ? (profile?.department || null) : null
   const displayName  = profile?.full_name || session.user.email
 
   // Employee users get the full-screen sidebar layout — no top header
@@ -181,11 +184,11 @@ export default function App() {
     )
   }
 
-  const roleBadgeLabel = isSuperAdmin ? 'CEO' : 'Sub-Admin'
-  const roleBadgeClass = isSuperAdmin ? 'role-admin' : 'role-subadmin'
+  const roleBadgeLabel = isSuperAdmin ? 'CEO' : isDiller ? 'Diller' : 'Sub-Admin'
+  const roleBadgeClass = isSuperAdmin ? 'role-admin' : isDiller ? 'role-diller' : 'role-subadmin'
 
-  // Sub-admin switched to their own worker/timer screen
-  if (isSubAdmin && workerMode) {
+  // Sub-admin / diller switched to their own worker/timer screen
+  if ((isSubAdmin || isDiller) && workerMode) {
     return (
       <div className="app" style={{ overflow: 'hidden' }}>
         <EmployeeView profile={profile} onSignOut={handleSignOut} deptSchedule={deptSchedules[profile?.department]} />
@@ -224,7 +227,9 @@ export default function App() {
         </div>
 
         <nav className="admin-sb-nav">
-          {ADMIN_NAV.map(item => (
+          {ADMIN_NAV.filter(item =>
+            isDiller ? !['reports', 'admin', 'salary'].includes(item.id) : true
+          ).map(item => (
             <button
               key={item.id}
               className={`admin-sb-item ${activeTab === item.id ? 'admin-sb-active' : ''}`}
@@ -234,8 +239,8 @@ export default function App() {
               {item.label}
             </button>
           ))}
-          {/* Sub-admins are also workers — give them access to their own timer */}
-          {isSubAdmin && (
+          {/* Sub-admins and dillers are also workers — give them access to their own timer */}
+          {(isSubAdmin || isDiller) && (
             <button
               className="admin-sb-item"
               onClick={() => setWorkerMode(true)}
@@ -265,11 +270,12 @@ export default function App() {
 
       {/* ── Main content ── */}
       <div className="admin-content">
-        {activeTab === 'dashboard'  && <AdminDashboard adminName={displayName} managedDept={managedDept} />}
-        {activeTab === 'myteam'     && <MyTeam managedDept={managedDept} />}
-        {activeTab === 'employees'  && <main className="app-main"><EmployeeTable departments={departments} managedDept={managedDept} /></main>}
-        {activeTab === 'salary'     && <main className="app-main"><SalaryReport managedDept={managedDept} /></main>}
-        {activeTab === 'admin'      && <main className="app-main"><AdminPanel departments={departments} onDepartmentsChange={setDepartments} deptSchedules={deptSchedules} onSchedulesChange={setDeptSchedules} currentUserId={profile?.id} isSuperAdmin={isSuperAdmin} managedDept={managedDept} /></main>}
+        {activeTab === 'dashboard'  && <AdminDashboard adminName={displayName} managedDept={managedDept} hideSalary={isDiller} />}
+        {activeTab === 'myteam'     && <MyTeam managedDept={managedDept} hideSalary={isDiller} />}
+        {activeTab === 'employees'  && <main className="app-main"><EmployeeTable departments={departments} managedDept={managedDept} hideSalary={isDiller} /></main>}
+        {activeTab === 'reports'    && !isDiller && <ReportsView managedDept={managedDept} />}
+        {activeTab === 'salary'     && !isDiller && <main className="app-main"><SalaryReport managedDept={managedDept} /></main>}
+        {activeTab === 'admin'      && !isDiller && <main className="app-main"><AdminPanel departments={departments} onDepartmentsChange={setDepartments} deptSchedules={deptSchedules} onSchedulesChange={setDeptSchedules} currentUserId={profile?.id} isSuperAdmin={isSuperAdmin} managedDept={managedDept} /></main>}
         {activeTab === 'profile'    && (
           <div style={{ flex: 1, overflowY: 'auto', minWidth: 0 }}>
             <ProfilePanel profile={profile} onUpdate={setProfile} />

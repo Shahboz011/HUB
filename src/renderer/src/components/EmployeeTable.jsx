@@ -52,7 +52,7 @@ function AvatarBadge({ emp }) {
 }
 
 function TableRow({ index, style, data }) {
-  const { employees, onFieldChange, activeSessions, activityMap, onViewHistory, onViewProfile } = data
+  const { employees, onFieldChange, activeSessions, activityMap, onViewHistory, onViewProfile, hideSalary } = data
   const emp = employees[index]
   const isEven = index % 2 === 0
   const color = deptColor(emp.department)
@@ -115,7 +115,7 @@ function TableRow({ index, style, data }) {
               <span className="live-badge-time" style={empIsIdle ? { color: '#f59e0b' } : {}}>
                 {empIsIdle ? 'Idle' : sessionElapsed(session.started_at)}
               </span>
-              <span className="live-badge-earned">{fmt(sessionEarned)}</span>
+              {!hideSalary && <span className="live-badge-earned">{fmt(sessionEarned)}</span>}
             </div>
           </div>
         ) : (
@@ -123,6 +123,7 @@ function TableRow({ index, style, data }) {
         )}
       </div>
 
+      {!hideSalary && (
       <div className="col col-input">
         <input
           type="number" min="0" max="744" step="1"
@@ -131,11 +132,15 @@ function TableRow({ index, style, data }) {
           className="salary-input hours-input"
         />
       </div>
+      )}
 
+      {!hideSalary && (
       <div className="col col-rate">
         <span className="rate-badge">${Number(emp.hourly_rate ?? 0)}/hr</span>
       </div>
+      )}
 
+      {!hideSalary && (
       <div className="col col-input">
         <input
           type="number" min="0" step="10"
@@ -144,7 +149,9 @@ function TableRow({ index, style, data }) {
           className="salary-input bonus-input"
         />
       </div>
+      )}
 
+      {!hideSalary && (
       <div className="col col-input">
         <input
           type="number" min="0" step="10"
@@ -153,34 +160,39 @@ function TableRow({ index, style, data }) {
           className="salary-input fine-input"
         />
       </div>
+      )}
 
+      {!hideSalary && (
       <div className="col col-salary">
         <span className="salary-value">{fmt(salary)}</span>
       </div>
+      )}
 
+      {!hideSalary && (
       <div className="col col-view">
         <button className="view-hist-btn" onClick={() => onViewHistory(emp)} title="View attendance history">
           <History size={14} />
           History
         </button>
       </div>
+      )}
     </div>
   )
 }
 
-function TableHeader() {
+function TableHeader({ hideSalary }) {
   return (
     <div className="table-header">
       <div className="col col-index">#</div>
       <div className="col col-employee">Employee</div>
       <div className="col col-dept">Department</div>
       <div className="col col-live">Live Status</div>
-      <div className="col col-input">Hours</div>
-      <div className="col col-rate">Rate</div>
-      <div className="col col-input">Bonus ($)</div>
-      <div className="col col-input">Fine ($)</div>
-      <div className="col col-salary">Net Salary</div>
-      <div className="col col-view" />
+      {!hideSalary && <div className="col col-input">Hours</div>}
+      {!hideSalary && <div className="col col-rate">Rate</div>}
+      {!hideSalary && <div className="col col-input">Bonus ($)</div>}
+      {!hideSalary && <div className="col col-input">Fine ($)</div>}
+      {!hideSalary && <div className="col col-salary">Net Salary</div>}
+      {!hideSalary && <div className="col col-view" />}
     </div>
   )
 }
@@ -224,7 +236,7 @@ function SummaryBar({ employees }) {
   )
 }
 
-export default function EmployeeTable({ departments, managedDept }) {
+export default function EmployeeTable({ departments, managedDept, hideSalary = false }) {
   const [employees, setEmployees] = useState([])
   const [activeSessions, setActiveSessions] = useState({})
   const [activityMap, setActivityMap] = useState({}) // { [empId]: { is_idle, ts } }
@@ -354,7 +366,7 @@ export default function EmployeeTable({ departments, managedDept }) {
         {saving && <span className="saving-badge">Saving…</span>}
       </div>
 
-      <TableHeader />
+      <TableHeader hideSalary={hideSalary} />
 
       <div className="list-wrapper">
         {filtered.length === 0 ? (
@@ -372,7 +384,7 @@ export default function EmployeeTable({ departments, managedDept }) {
               <List
                 height={height} width={width}
                 itemCount={filtered.length} itemSize={52}
-                itemData={{ employees: filtered, onFieldChange, activeSessions, activityMap, onViewHistory: setSelectedEmployee, onViewProfile: setSelectedProfile }}
+                itemData={{ employees: filtered, onFieldChange, activeSessions, activityMap, onViewHistory: setSelectedEmployee, onViewProfile: setSelectedProfile, hideSalary }}
                 overscanCount={10}
               >
                 {TableRow}
@@ -382,7 +394,7 @@ export default function EmployeeTable({ departments, managedDept }) {
         )}
       </div>
 
-      <SummaryBar employees={filtered} />
+      {!hideSalary && <SummaryBar employees={filtered} />}
 
       {selectedProfile && (
         <WorkerProfileModal
@@ -390,6 +402,7 @@ export default function EmployeeTable({ departments, managedDept }) {
           session={selectedProfile.session}
           status={selectedProfile.status}
           onClose={() => setSelectedProfile(null)}
+          hideSalary={hideSalary}
         />
       )}
     </div>

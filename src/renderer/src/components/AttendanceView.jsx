@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { ArrowLeft, ClipboardList, Clock, CalendarDays, DollarSign, PiggyBank, Camera, RefreshCw, XCircle, Trash2, ChevronDown } from 'lucide-react'
+import { ArrowLeft, ClipboardList, Clock, CalendarDays, DollarSign, PiggyBank, Camera, RefreshCw, XCircle, ChevronDown } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import UserAvatar from './UserAvatar'
 

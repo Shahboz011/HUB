@@ -10,6 +10,7 @@ const STATUS_STYLE = {
   break:    { bg: '#dbeafe', color: '#3b82f6', dot: '#3b82f6' },
   restroom: { bg: '#e0f2fe', color: '#0284c7', dot: '#0284c7' },
   lunch:    { bg: '#ffedd5', color: '#f97316', dot: '#f97316' },
+  pray:     { bg: '#faf5ff', color: '#9333ea', dot: '#a855f7' },
   idle:     { bg: '#fef3c7', color: '#d97706', dot: '#f59e0b' },
   offline:  { bg: '#f1f5f9', color: '#94a3b8', dot: '#cbd5e1' },
 }
@@ -29,7 +30,7 @@ function fmtDur(totalSecs) {
   const s = secs % 60
   if (m < 60) return `${m}m ${String(s).padStart(2, '0')}s`
   const h = Math.floor(m / 60); const rm = m % 60
-  return `${h}h ${String(rm).padStart(2, '0')}m`
+  return `${h}h ${String(rm).padStart(2, '0')}m ${String(s).padStart(2, '0')}s`
 }
 
 function fmtDate(iso) {
@@ -52,7 +53,7 @@ function InfoRow({ icon, label, value, valueColor }) {
   )
 }
 
-export default function WorkerProfileModal({ emp, session, status, onClose }) {
+export default function WorkerProfileModal({ emp, session, status, onClose, hideSalary = false }) {
   const [sessions,     setSessions]     = useState([])
   const [transactions, setTransactions] = useState([])
   const [loading,      setLoading]      = useState(true)
@@ -87,17 +88,17 @@ export default function WorkerProfileModal({ emp, session, status, onClose }) {
 
   // ── Today's live session stats ──
   let sessionElapsed = 0, activeSecs = 0, actPct = null, earnedToday = 0
-  let breakCount = 0, poolUsed = 0
+  let breakCount = 0, idleTodaySecs = 0
   if (session) {
     const salaryStart  = session.salary_start_at || session.started_at
     sessionElapsed     = Math.max(0, (Date.now() - new Date(salaryStart).getTime()) / 1000)
     const unpaidIdle   = Number(session.accumulated_idle_secs)         || 0
     const unpaidBreak  = Number(session.accumulated_unpaid_break_secs) || 0
+    idleTodaySecs      = unpaidIdle
     activeSecs         = Math.max(0, sessionElapsed - unpaidIdle - unpaidBreak)
     actPct             = sessionElapsed > 30 ? Math.round((activeSecs / sessionElapsed) * 100) : 100
     earnedToday        = (activeSecs / 3600) * rate
     breakCount         = Number(session.break_count) || 0
-    poolUsed           = Number(session.used_restroom_secs) || 0
   }
 
   const pastSessions = sessions.filter(s => s.ended_at)
@@ -132,7 +133,7 @@ export default function WorkerProfileModal({ emp, session, status, onClose }) {
         <div className="wpm-section">
           <InfoRow icon={<Building2 size={13} />}  label="Department"   value={emp.department || '—'} />
           <InfoRow icon={<Briefcase size={13} />}  label="Position"     value={emp.position   || '—'} />
-          <InfoRow icon={<DollarSign size={13} />} label="Hourly Rate"  value={`$${rate.toFixed(2)}/hr`} valueColor="#059669" />
+          {!hideSalary && <InfoRow icon={<DollarSign size={13} />} label="Hourly Rate"  value={`$${rate.toFixed(2)}/hr`} valueColor="#059669" />}
           <InfoRow icon={<Clock size={13} />}      label="Total Hours"  value={`${totalHours.toFixed(2)}h`} />
         </div>
 
@@ -145,10 +146,12 @@ export default function WorkerProfileModal({ emp, session, status, onClose }) {
                 <span className="wpm-today-val">{fmtDur(sessionElapsed)}</span>
                 <span className="wpm-today-lbl">Session time</span>
               </div>
+              {!hideSalary && (
               <div className="wpm-today-cell">
                 <span className="wpm-today-val" style={{ color: '#059669' }}>${earnedToday.toFixed(2)}</span>
                 <span className="wpm-today-lbl">Earned today</span>
               </div>
+              )}
               <div className="wpm-today-cell">
                 <span className="wpm-today-val" style={{ color: actPct >= 80 ? '#059669' : actPct >= 50 ? '#f59e0b' : '#ef4444' }}>{actPct}%</span>
                 <span className="wpm-today-lbl">Activity</span>
@@ -159,16 +162,10 @@ export default function WorkerProfileModal({ emp, session, status, onClose }) {
               </div>
             </div>
             <div className="wpm-pool-row">
-              <span className="wpm-pool-label">🕐 Free pool this hour</span>
-              <span className="wpm-pool-val" style={{ color: poolUsed >= 300 ? '#ef4444' : '#64748b' }}>
-                {fmtDur(poolUsed)} / 5m
+              <span className="wpm-pool-label">⏸ Idle time today</span>
+              <span className="wpm-pool-val" style={{ color: idleTodaySecs > 1800 ? '#ef4444' : idleTodaySecs > 0 ? '#d97706' : '#64748b' }}>
+                {idleTodaySecs > 0 ? fmtDur(idleTodaySecs) : '—'}
               </span>
-            </div>
-            <div className="wpm-pool-bar-track">
-              <div className="wpm-pool-bar-fill" style={{
-                width: `${Math.min(100, (poolUsed / 300) * 100)}%`,
-                background: poolUsed >= 300 ? '#ef4444' : poolUsed >= 240 ? '#f59e0b' : '#3b82f6',
-              }} />
             </div>
           </div>
         )}
@@ -182,8 +179,8 @@ export default function WorkerProfileModal({ emp, session, status, onClose }) {
             <div className="wpm-empty">No past sessions yet.</div>
           ) : (
             <div className="wpm-sess-list">
-              <div className="wpm-sess-head">
-                <span>Date</span><span>Duration</span><span>Earned</span>
+              <div className={`wpm-sess-head${hideSalary ? ' wpm-sess-no-salary' : ''}`}>
+                <span>Date</span><span>Active</span><span>Idle</span>{!hideSalary && <span>Earned</span>}
               </div>
               {pastSessions.map(s => {
                 const salStart = s.salary_start_at || s.started_at
@@ -193,10 +190,13 @@ export default function WorkerProfileModal({ emp, session, status, onClose }) {
                 const paid     = Math.max(0, wallSecs - uIdle - uBreak)
                 const earned   = (paid / 3600) * rate
                 return (
-                  <div key={s.id} className="wpm-sess-row">
+                  <div key={s.id} className={`wpm-sess-row${hideSalary ? ' wpm-sess-no-salary' : ''}`}>
                     <span>{fmtDate(s.started_at)}<br /><span style={{ fontSize: 10, color: 'var(--text-muted)' }}>{fmtTime(s.started_at)}</span></span>
                     <span>{fmtDur(paid)}</span>
-                    <span style={{ color: '#059669', fontWeight: 600 }}>${earned.toFixed(2)}</span>
+                    <span style={{ color: uIdle > 0 ? '#d97706' : 'var(--text-muted)', fontWeight: uIdle > 0 ? 600 : 400 }}>
+                      {uIdle > 0 ? fmtDur(uIdle) : '—'}
+                    </span>
+                    {!hideSalary && <span style={{ color: '#059669', fontWeight: 600 }}>${earned.toFixed(2)}</span>}
                   </div>
                 )
               })}
@@ -205,7 +205,7 @@ export default function WorkerProfileModal({ emp, session, status, onClose }) {
         </div>
 
         {/* ── Bonuses & fines ── */}
-        {!loading && transactions.length > 0 && (
+        {!hideSalary && !loading && transactions.length > 0 && (
           <div className="wpm-section">
             <div className="wpm-section-title"><Coffee size={13} style={{ display: 'inline', marginRight: 4 }} />Bonuses &amp; Fines</div>
             <div className="wpm-tx-list">
@@ -222,7 +222,7 @@ export default function WorkerProfileModal({ emp, session, status, onClose }) {
           </div>
         )}
 
-        {!loading && transactions.length === 0 && (
+        {!hideSalary && !loading && transactions.length === 0 && (
           <div className="wpm-section">
             <div className="wpm-section-title">Bonuses &amp; Fines</div>
             <div className="wpm-empty">No transactions recorded.</div>

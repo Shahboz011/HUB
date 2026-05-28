@@ -108,7 +108,7 @@ function activityPct(session) {
   return Math.round((Math.max(0, wall - idle) / wall) * 100)
 }
 
-export default function MyTeam({ managedDept }) {
+export default function MyTeam({ managedDept, hideSalary = false }) {
   const [employees,      setEmployees]      = useState([])
   const [activeSessions, setActiveSessions] = useState({})
   const [activityMap,    setActivityMap]    = useState({})
@@ -459,6 +459,7 @@ export default function MyTeam({ managedDept }) {
         session={selectedWorker.session}
         status={selectedWorker.status}
         onClose={() => setSelectedWorker(null)}
+        hideSalary={hideSalary}
       />
     )}
     </>
