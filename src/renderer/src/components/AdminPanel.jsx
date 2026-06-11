@@ -1,15 +1,16 @@
 import { useState, useEffect } from 'react'
 import { ArrowLeft, UserPlus, ChevronRight, Trash2, Clock, ShieldAlert } from 'lucide-react'
 import { supabase } from '../lib/supabase'
+import { callEdgeFn } from '../lib/edgeFunctions'
 import { loadProhibited, saveProhibited, DEFAULT_PROHIBITED } from './ReportsView'
 
-// Safe IPC wrapper — works in Electron; falls back gracefully in browser preview
-const electronAPI = window.electronAPI ?? {
-  inviteMember:     async () => ({ ok: false, error: 'Not running in Electron. Please use the desktop app.' }),
-  deleteMember:     async () => ({ ok: false, error: 'Not running in Electron. Please use the desktop app.' }),
-  updateMember:     async () => ({ ok: false, error: 'Not running in Electron. Please use the desktop app.' }),
-  updateDepartment: async () => ({ ok: false, error: 'Not running in Electron. Please use the desktop app.' }),
-  copyToClipboard:  async (text) => { try { await navigator.clipboard.writeText(text) } catch {} },
+// Clipboard helper — not a privileged operation, stays as IPC with navigator fallback
+async function copyToClipboard(text) {
+  if (window.electronAPI?.copyToClipboard) {
+    await window.electronAPI.copyToClipboard(text)
+  } else {
+    try { await navigator.clipboard.writeText(text) } catch {}
+  }
 }
 
 function isValidEmail(email) {
@@ -41,7 +42,7 @@ function DeptMembers({ dept, employees, departments, onBack, onEmployeeUpdate, o
 
   async function saveSchedule() {
     setSchedSaving(true); setSchedMsg('')
-    const result = await electronAPI.updateDepartment({ name: dept, fields: { work_start: workStart, work_end: workEnd } })
+    const result = await callEdgeFn('admin-update-department', { name: dept, fields: { work_start: workStart, work_end: workEnd } })
     if (result.ok) {
       setSchedMsg('✓ Saved')
       onScheduleChange?.({ work_start: workStart, work_end: workEnd })
@@ -69,7 +70,7 @@ function DeptMembers({ dept, employees, departments, onBack, onEmployeeUpdate, o
     setInviting(true); setInvErr(''); setCreatedCredentials(null); setCopied(false)
 
     const rate = Number(invRate) || 0
-    const result = await electronAPI.inviteMember({
+    const result = await callEdgeFn('admin-invite-member', {
       email: invEmail.trim(),
       department: dept,
       position: invPosition.trim(),
@@ -91,7 +92,7 @@ function DeptMembers({ dept, employees, departments, onBack, onEmployeeUpdate, o
   async function copyCredentials() {
     const { email, tempPassword } = createdCredentials
     const text = `PharmaStaff Hub Login\nEmail: ${email}\nTemp Password: ${tempPassword}\n\nOpen the app and sign in. You will be asked to set your name and a new password.`
-    await electronAPI.copyToClipboard(text)
+    await copyToClipboard(text)
     setCopied(true)
     setTimeout(() => setCopied(false), 2500)
   }
@@ -103,7 +104,7 @@ function DeptMembers({ dept, employees, departments, onBack, onEmployeeUpdate, o
 
   async function deleteEmployee(emp) {
     setDeleteErr('')
-    const result = await electronAPI.deleteMember({ userId: emp.id })
+    const result = await callEdgeFn('admin-delete-member', { userId: emp.id })
     if (!result.ok) { setDeleteErr(`Failed to delete ${emp.email || emp.id}: ${result.error}`); setConfirmDeleteId(null); return }
     onEmployeeDelete(emp.id)
     setConfirmDeleteId(null)
@@ -320,7 +321,7 @@ export default function AdminPanel({ departments, onDepartmentsChange, deptSched
 
   async function handleDeleteEmployee(emp) {
     setDeleteErr('')
-    const result = await electronAPI.deleteMember({ userId: emp.id })
+    const result = await callEdgeFn('admin-delete-member', { userId: emp.id })
     if (!result.ok) { setDeleteErr(`Failed to delete ${emp.email || emp.id}: ${result.error}`); setConfirmDeleteId(null); return }
     removeLocalEmployee(emp.id)
     setConfirmDeleteId(null)
@@ -350,19 +351,10 @@ export default function AdminPanel({ departments, onDepartmentsChange, deptSched
       ? Number(value) || 0
       : value
     updateLocalEmployee(id, field, parsed)
-    // Use service-key IPC (bypasses RLS) — falls back to anon client if IPC not available
-    if (typeof electronAPI.updateMember === 'function') {
-      const result = await electronAPI.updateMember({ userId: id, fields: { [field]: parsed } })
-      if (!result.ok) {
-        console.error('[updateEmployee] Save failed:', result.error)
-        alert(`Failed to save: ${result.error}`)
-      }
-    } else {
-      const { error } = await supabase.from('profiles').update({ [field]: parsed }).eq('id', id)
-      if (error) {
-        console.error('[updateEmployee] Supabase error:', error)
-        alert(`Failed to save: ${error.message}`)
-      }
+    const result = await callEdgeFn('admin-update-member', { userId: id, fields: { [field]: parsed } })
+    if (!result.ok) {
+      console.error('[updateEmployee] Save failed:', result.error)
+      alert(`Failed to save: ${result.error}`)
     }
   }
 
@@ -371,7 +363,7 @@ export default function AdminPanel({ departments, onDepartmentsChange, deptSched
     setInviting(true); setInvErr(''); setInvCredentials(null); setInvCopied(false)
 
     const rate = Number(invRate) || 0
-    const result = await electronAPI.inviteMember({
+    const result = await callEdgeFn('admin-invite-member', {
       email: invEmail.trim(),
       department: invDept || null,
       position: invPosition.trim() || null,

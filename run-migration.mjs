@@ -1,7 +1,8 @@
 import https from 'https'
 
-const PROJECT = 'oewfgyiuyeetsxebowaa'
-const SERVICE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9ld2ZneWl1eWVldHN4ZWJvd2FhIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3OTUzNTE3MywiZXhwIjoyMDk1MTExMTczfQ.rWCGISd8zfe-gkgVDBGaz5SCP0lVsiWhyZX4FgJ-c3A'
+const PROJECT = 'dbukihrdqbjzohbcngqr'
+// Paste the NEW project's service_role key here (Project Settings → API → service_role).
+const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || 'PASTE_NEW_SERVICE_ROLE_KEY'
 
 const SQL = `
 ALTER TABLE work_sessions

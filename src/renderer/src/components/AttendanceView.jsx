@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { ArrowLeft, ClipboardList, Clock, CalendarDays, DollarSign, PiggyBank, Camera, RefreshCw, XCircle, ChevronDown } from 'lucide-react'
 import { supabase } from '../lib/supabase'
+import { callEdgeFn, fetchScreenshotUrls } from '../lib/edgeFunctions'
 import UserAvatar from './UserAvatar'
 
 const DEPT_COLORS = [
@@ -292,12 +293,8 @@ function ScreenshotsSection({ employeeId }) {
       .limit(48)
 
     if (!error && data?.length) {
-      const dataUrls = window.electronAPI?.fetchScreenshotImages
-        ? await window.electronAPI.fetchScreenshotImages(data.map(s => s.path))
-        : null
-      if (dataUrls) {
-        setScreenshots(data.map((s, i) => ({ ...s, url: dataUrls[i] })).filter(s => s.url))
-      }
+      const signedUrls = await fetchScreenshotUrls(data.map(s => s.path))
+      setScreenshots(data.map((s, i) => ({ ...s, url: signedUrls[i] })).filter(s => s.url))
     } else if (!isRefresh) {
       setScreenshots([])
     }
@@ -423,20 +420,11 @@ function BonusFineSection({ employee }) {
     if (!amt || amt <= 0) { setError('Enter a valid amount'); return }
     setError(''); setSaving(true)
 
-    // Use service-key IPC so sub-admins can write to transactions (bypasses RLS)
-    const ipc = window.electronAPI
     let tx, errMsg
-    if (ipc?.insertTransaction) {
-      const result = await ipc.insertTransaction({ employee_id: employee.id, type, amount: amt, note: note.trim() })
+    {
+      const result = await callEdgeFn('admin-manage-transaction', { action: 'insert', employee_id: employee.id, type, amount: amt, note: note.trim() })
       if (!result.ok) { setError(result.error || 'Failed to save'); setSaving(false); return }
       tx = result.tx
-    } else {
-      const { data, error: err } = await supabase
-        .from('transactions')
-        .insert({ employee_id: employee.id, type, amount: amt, note: note.trim() })
-        .select().single()
-      if (err) { setError(err.message); setSaving(false); return }
-      tx = data
     }
 
     const field = type === 'bonus' ? 'bonuses' : 'fines'
@@ -450,12 +438,7 @@ function BonusFineSection({ employee }) {
   }
 
   async function deleteTransaction(tx) {
-    // Use service-key IPC so sub-admins can delete transactions (bypasses RLS)
-    if (window.electronAPI?.deleteTransaction) {
-      await window.electronAPI.deleteTransaction({ txId: tx.id })
-    } else {
-      await supabase.from('transactions').delete().eq('id', tx.id)
-    }
+    await callEdgeFn('admin-manage-transaction', { action: 'delete', txId: tx.id })
     const field = tx.type === 'bonus' ? 'bonuses' : 'fines'
     const newTotal = Math.max(0, localTotals[field] - tx.amount)
     setLocalTotals(prev => ({ ...prev, [field]: newTotal }))
@@ -499,12 +482,7 @@ function BonusFineSection({ employee }) {
       if (!amt || amt <= 0) return
       const field = tx.type === 'bonus' ? 'bonuses' : 'fines'
       const diff = amt - tx.amount
-      // Use service-key IPC so sub-admins can update transactions (bypasses RLS)
-      if (window.electronAPI?.updateTransaction) {
-        await window.electronAPI.updateTransaction({ txId: tx.id, fields: { amount: amt, note: editNote.trim() } })
-      } else {
-        await supabase.from('transactions').update({ amount: amt, note: editNote.trim() }).eq('id', tx.id)
-      }
+      await callEdgeFn('admin-manage-transaction', { action: 'update', txId: tx.id, fields: { amount: amt, note: editNote.trim() } })
       const newTotal = Math.max(0, localTotals[field] + diff)
       setLocalTotals(prev => ({ ...prev, [field]: newTotal }))
       await supabase.from('profiles').update({ [field]: newTotal }).eq('id', employee.id)

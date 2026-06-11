@@ -273,7 +273,7 @@ export default function App() {
         {activeTab === 'dashboard'  && <AdminDashboard adminName={displayName} managedDept={managedDept} hideSalary={isDiller} />}
         {activeTab === 'myteam'     && <MyTeam managedDept={managedDept} hideSalary={isDiller} />}
         {activeTab === 'employees'  && <main className="app-main"><EmployeeTable departments={departments} managedDept={managedDept} hideSalary={isDiller} /></main>}
-        {activeTab === 'reports'    && !isDiller && <ReportsView managedDept={managedDept} />}
+        {activeTab === 'reports'    && !isDiller && <ReportsView managedDept={managedDept} deptSchedules={deptSchedules} />}
         {activeTab === 'salary'     && !isDiller && <main className="app-main"><SalaryReport managedDept={managedDept} /></main>}
         {activeTab === 'admin'      && !isDiller && <main className="app-main"><AdminPanel departments={departments} onDepartmentsChange={setDepartments} deptSchedules={deptSchedules} onSchedulesChange={setDeptSchedules} currentUserId={profile?.id} isSuperAdmin={isSuperAdmin} managedDept={managedDept} /></main>}
         {activeTab === 'profile'    && (

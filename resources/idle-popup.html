@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <!--
+    CSP: no external resources allowed.
+    'unsafe-inline' is needed for the style and script blocks below.
+    There is NO user-supplied content rendered anywhere in this file,
+    so inline scripts present no injection risk here.
+  -->
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline';" />
+  <title>Timer Paused</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0f172a;
+      color: #e2e8f0;
+      height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      user-select: none;
+    }
+    .card { text-align: center; padding: 28px 40px; width: 100%; }
+    .icon { font-size: 38px; margin-bottom: 10px; }
+    h1 { font-size: 17px; font-weight: 700; color: #f1f5f9; margin-bottom: 6px; }
+    p  { font-size: 12px; color: #94a3b8; line-height: 1.6; margin-bottom: 18px; }
+    .timer {
+      font-size: 34px;
+      font-weight: 800;
+      color: #f59e0b;
+      margin-bottom: 20px;
+      font-variant-numeric: tabular-nums;
+      letter-spacing: -0.5px;
+    }
+    .btn {
+      background: #6366f1;
+      color: #fff;
+      border: none;
+      padding: 12px 0;
+      border-radius: 9px;
+      width: 100%;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background .12s, transform .08s;
+    }
+    .btn:hover  { background: #4f46e5; }
+    .btn:active { transform: scale(.97); }
+    .hint { font-size: 11px; color: #475569; margin-top: 10px; min-height: 16px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="icon">⏸</div>
+    <h1>Timer Paused</h1>
+    <p>No activity detected.<br>Idle time is not counted as salary.</p>
+    <div class="timer" id="t">0s</div>
+    <button class="btn" id="btn">&#9654;&nbsp; Continue to work?</button>
+    <div class="hint" id="hint">Click anywhere 2 times to resume</div>
+  </div>
+
+  <script>
+    // window.idlePopupAPI is injected by idle-popup-preload.js via contextBridge.
+    // It exposes exactly one method: resume().
+    // No require('electron'), no nodeIntegration, no access to Node APIs.
+
+    var clicks   = 0;
+    var startMs  = Date.now();
+
+    function fmt(s) {
+      var h = Math.floor(s / 3600);
+      var m = Math.floor((s % 3600) / 60);
+      var sec = s % 60;
+      if (h > 0) return h + 'h ' + m + 'm';
+      if (m > 0) return m + 'm ' + String(sec).padStart(2, '0') + 's';
+      return sec + 's';
+    }
+
+    setInterval(function () {
+      document.getElementById('t').textContent = fmt(Math.floor((Date.now() - startMs) / 1000));
+    }, 500);
+
+    function resume() {
+      window.idlePopupAPI.resume();
+    }
+
+    document.getElementById('btn').addEventListener('click', function (e) {
+      e.stopPropagation();
+      resume();
+    });
+
+    document.addEventListener('click', function () {
+      clicks++;
+      if (clicks >= 2) {
+        resume();
+      } else {
+        document.getElementById('hint').textContent = 'Click ' + (2 - clicks) + ' more time to resume';
+      }
+    });
+  </script>
+</body>
+</html>

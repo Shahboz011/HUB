@@ -1,5 +1,6 @@
 import { useState, useRef } from 'react'
 import { supabase } from '../lib/supabase'
+import { callEdgeFn } from '../lib/edgeFunctions'
 import { Camera, X, Info, KeyRound, AtSign, Tag, Globe } from 'lucide-react'
 import * as avatarCache from '../lib/avatarCache'
 import UserAvatar from './UserAvatar'
@@ -89,14 +90,8 @@ export default function ProfilePanel({ profile: initialProfile, onUpdate }) {
   }
 
   async function saveViaIPC(fields) {
-    if (window.electronAPI?.updateMember) {
-      const r = await window.electronAPI.updateMember({ userId: prof.id, fields })
-      if (!r.ok) throw new Error(r.error || 'Unknown error')
-    } else {
-      // Fallback: direct Supabase update (works if RLS allows self-update)
-      const { error } = await supabase.from('profiles').update(fields).eq('id', prof.id)
-      if (error) throw error
-    }
+    const r = await callEdgeFn('admin-update-member', { userId: prof.id, fields })
+    if (!r.ok) throw new Error(r.error || 'Unknown error')
   }
 
   // ── avatar upload ──
@@ -118,26 +113,19 @@ export default function ProfilePanel({ profile: initialProfile, onUpdate }) {
       const base64 = btoa(binary)
       const mimeType = file.type || 'image/jpeg'
 
-      if (window.electronAPI?.uploadAvatar) {
-        const r = await window.electronAPI.uploadAvatar({ userId: prof.id, base64, mimeType })
-        if (!r.ok) throw new Error(r.error)
-        // Push into in-memory cache immediately so every component updates at once
-        if (r.dataUrl) avatarCache.set(prof.id, r.dataUrl)
-        await saveViaIPC({ avatar_url: r.url })
-        applyUpdate({ avatar_url: r.url })
-      } else {
-        // Web fallback: Supabase storage via anon key
-        const ext = mimeType === 'image/png' ? 'png' : 'jpg'
-        const path = `${prof.id}/avatar.${ext}`
-        const { error: upErr } = await supabase.storage
-          .from('avatars').upload(path, file, { upsert: true, contentType: mimeType })
-        if (upErr) throw upErr
-        const { data: { publicUrl } } = supabase.storage.from('avatars').getPublicUrl(path)
-        const dataUrl = `data:${mimeType};base64,${base64}`
-        avatarCache.set(prof.id, dataUrl)
-        await saveViaIPC({ avatar_url: publicUrl })
-        applyUpdate({ avatar_url: publicUrl })
-      }
+      // Upload to Supabase Storage using the user's own JWT (no service key)
+      const ext = mimeType === 'image/png' ? 'png' : mimeType === 'image/webp' ? 'webp' : 'jpg'
+      const storagePath = `${prof.id}/avatar.${ext}`
+      const { error: upErr } = await supabase.storage
+        .from('avatars').upload(storagePath, file, { upsert: true, contentType: mimeType })
+      if (upErr) throw upErr
+      const { data: { publicUrl } } = supabase.storage.from('avatars').getPublicUrl(storagePath)
+      const dataUrl = `data:${mimeType};base64,${base64}`
+      avatarCache.set(prof.id, dataUrl)
+      // Ask main process to write local disk cache (disk access requires Node.js)
+      window.electronAPI?.uploadAvatar?.({ userId: prof.id, base64, mimeType })
+      await saveViaIPC({ avatar_url: publicUrl })
+      applyUpdate({ avatar_url: publicUrl })
     } catch (err) {
       setAvatarError(err.message || 'Upload failed')
     } finally {

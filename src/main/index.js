@@ -3,353 +3,33 @@ const { join } = require('path')
 const { autoUpdater } = require('electron-updater')
 const https = require('https')
 const fs = require('fs')
-const crypto = require('crypto')
 const { execFile } = require('child_process')
 
-const SUPABASE_URL = 'oewfgyiuyeetsxebowaa.supabase.co'
-const SERVICE_KEY  = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9ld2ZneWl1eWVldHN4ZWJvd2FhIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3OTUzNTE3MywiZXhwIjoyMDk1MTExMTczfQ.rWCGISd8zfe-gkgVDBGaz5SCP0lVsiWhyZX4FgJ-c3A'
+// All privileged admin operations (invite, delete, update member/department/transactions,
+// clear history/screenshots) have moved to Supabase Edge Functions.
+// The service-role key no longer exists in the client bundle.
+// See supabase/functions/ for the server-side implementations.
 
-function generateTempPassword() {
-  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
-  let pwd = 'PSH-'
-  for (let i = 0; i < 6; i++) pwd += chars[crypto.randomInt(chars.length)]
-  return pwd
-}
-
-function supabaseAdminPost(path, body) {
-  return new Promise((resolve, reject) => {
-    const payload = JSON.stringify(body)
-    const options = {
-      hostname: SUPABASE_URL,
-      path,
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${SERVICE_KEY}`,
-        'apikey': SERVICE_KEY,
-        'Content-Length': Buffer.byteLength(payload),
-      },
-    }
-    const req = https.request(options, (res) => {
-      let data = ''
-      res.on('data', chunk => { data += chunk })
-      res.on('end', () => {
-        try { resolve({ status: res.statusCode, body: JSON.parse(data) }) }
-        catch { resolve({ status: res.statusCode, body: data }) }
-      })
-    })
-    req.on('error', reject)
-    req.write(payload)
-    req.end()
-  })
-}
-
-function supabaseAdminPatch(path, body) {
-  return new Promise((resolve, reject) => {
-    const payload = JSON.stringify(body)
-    const options = {
-      hostname: SUPABASE_URL,
-      path,
-      method: 'PATCH',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${SERVICE_KEY}`,
-        'apikey': SERVICE_KEY,
-        'Content-Length': Buffer.byteLength(payload),
-        'Prefer': 'return=minimal',
-      },
-    }
-    const req = https.request(options, (res) => {
-      let data = ''
-      res.on('data', chunk => { data += chunk })
-      res.on('end', () => {
-        try { resolve({ status: res.statusCode, body: data ? JSON.parse(data) : null }) }
-        catch { resolve({ status: res.statusCode, body: data }) }
-      })
-    })
-    req.on('error', reject)
-    req.write(payload)
-    req.end()
-  })
-}
-
-// IPC: create a new member without sending any email
-ipcMain.handle('invite-member', async (_event, { email, department, position, hourly_rate }) => {
-  const tempPassword = generateTempPassword()
-  const result = await supabaseAdminPost('/auth/v1/admin/users', {
-    email,
-    password: tempPassword,
-    email_confirm: true,         // skip email confirmation
-    user_metadata: { department, position, hourly_rate },
-  })
-
-  if (result.status === 200 || result.status === 201) {
-    return { ok: true, tempPassword }
-  }
-
-  // User already exists — just return error so admin knows
-  const msg = result.body?.msg || result.body?.message || result.body?.error_description || 'Unknown error'
-  return { ok: false, error: msg }
-})
-
-// IPC: delete a member from auth + profile
-ipcMain.handle('delete-member', async (_event, { userId }) => {
-  const result = await new Promise((resolve, reject) => {
-    const options = {
-      hostname: SUPABASE_URL,
-      path: `/auth/v1/admin/users/${userId}`,
-      method: 'DELETE',
-      headers: {
-        'Authorization': `Bearer ${SERVICE_KEY}`,
-        'apikey': SERVICE_KEY,
-      },
-    }
-    const req = https.request(options, (res) => {
-      let data = ''
-      res.on('data', chunk => { data += chunk })
-      res.on('end', () => resolve({ status: res.statusCode, body: data }))
-    })
-    req.on('error', reject)
-    req.end()
-  })
-  if (result.status === 200 || result.status === 204) return { ok: true }
-  return { ok: false, error: `Status ${result.status}` }
-})
-
-// IPC: update department fields (schedule, etc.) with service-role key
-ipcMain.handle('update-department', async (_event, { name, fields }) => {
-  const result = await supabaseAdminPatch(`/rest/v1/departments?name=eq.${encodeURIComponent(name)}`, fields)
-  console.log('[update-department] status:', result.status, 'body:', JSON.stringify(result.body))
-  if (result.status >= 200 && result.status < 300) return { ok: true }
-  return { ok: false, error: `Status ${result.status}: ${JSON.stringify(result.body)}` }
-})
-
-// IPC: insert a transaction row with service-role key (bypasses RLS)
-// Returns { ok, tx } where tx is the inserted row
-ipcMain.handle('insert-transaction', async (_event, { employee_id, type, amount, note }) => {
-  const result = await new Promise((resolve, reject) => {
-    const payload = JSON.stringify({ employee_id, type, amount, note: note || '' })
-    const options = {
-      hostname: SUPABASE_URL,
-      path: '/rest/v1/transactions',
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${SERVICE_KEY}`,
-        'apikey': SERVICE_KEY,
-        'Content-Length': Buffer.byteLength(payload),
-        'Prefer': 'return=representation',
-      },
-    }
-    const req = https.request(options, (res) => {
-      let data = ''
-      res.on('data', chunk => { data += chunk })
-      res.on('end', () => {
-        try { resolve({ status: res.statusCode, body: JSON.parse(data) }) }
-        catch { resolve({ status: res.statusCode, body: data }) }
-      })
-    })
-    req.on('error', reject)
-    req.write(payload)
-    req.end()
-  })
-  if (result.status >= 200 && result.status < 300) {
-    const tx = Array.isArray(result.body) ? result.body[0] : result.body
-    return { ok: true, tx }
-  }
-  return { ok: false, error: `Status ${result.status}: ${JSON.stringify(result.body)}` }
-})
-
-// IPC: delete a transaction row with service-role key (bypasses RLS)
-ipcMain.handle('delete-transaction', async (_event, { txId }) => {
-  const result = await new Promise((resolve, reject) => {
-    const options = {
-      hostname: SUPABASE_URL,
-      path: `/rest/v1/transactions?id=eq.${txId}`,
-      method: 'DELETE',
-      headers: {
-        'Authorization': `Bearer ${SERVICE_KEY}`,
-        'apikey': SERVICE_KEY,
-        'Prefer': 'return=minimal',
-      },
-    }
-    const req = https.request(options, (res) => {
-      let data = ''
-      res.on('data', chunk => { data += chunk })
-      res.on('end', () => resolve({ status: res.statusCode, body: data }))
-    })
-    req.on('error', reject)
-    req.end()
-  })
-  if (result.status >= 200 && result.status < 300) return { ok: true }
-  return { ok: false, error: `Status ${result.status}` }
-})
-
-// IPC: update a transaction row with service-role key (bypasses RLS)
-ipcMain.handle('update-transaction', async (_event, { txId, fields }) => {
-  const result = await supabaseAdminPatch(`/rest/v1/transactions?id=eq.${txId}`, fields)
-  if (result.status >= 200 && result.status < 300) return { ok: true }
-  return { ok: false, error: `Status ${result.status}: ${JSON.stringify(result.body)}` }
-})
-
-// IPC: update any profile field(s) with service-role key (bypasses RLS)
-// Used for role/department changes that the anon key cannot persist
-ipcMain.handle('update-member', async (_event, { userId, fields }) => {
-  console.log('[update-member] Updating userId:', userId, 'fields:', JSON.stringify(fields))
-  const result = await supabaseAdminPatch(`/rest/v1/profiles?id=eq.${userId}`, fields)
-  console.log('[update-member] Response status:', result.status, 'body:', JSON.stringify(result.body))
-  if (result.status >= 200 && result.status < 300) return { ok: true }
-  return { ok: false, error: `Status ${result.status}: ${JSON.stringify(result.body)}` }
-})
+const SUPABASE_URL = 'dbukihrdqbjzohbcngqr.supabase.co'
 
 // IPC: get app version
 ipcMain.handle('get-version', () => app.getVersion())
 
-// IPC: delete all screenshots for an employee (storage files + DB records)
-ipcMain.handle('clear-employee-screenshots', async (_event, { userId }) => {
-  // Bulk-delete storage files by prefix
-  try {
-    const payload = JSON.stringify({ prefixes: [`${userId}/`] })
-    await new Promise((resolve) => {
-      const options = {
-        hostname: SUPABASE_URL,
-        path: '/storage/v1/object/delete/screenshots',
-        method: 'DELETE',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${SERVICE_KEY}`,
-          'apikey': SERVICE_KEY,
-          'Content-Length': Buffer.byteLength(payload),
-        },
-      }
-      const req = https.request(options, (res) => { res.on('data', () => {}); res.on('end', resolve) })
-      req.on('error', resolve)
-      req.write(payload)
-      req.end()
-    })
-  } catch { /* storage cleanup is best-effort */ }
-
-  // Delete DB records
-  const result = await new Promise((resolve, reject) => {
-    const options = {
-      hostname: SUPABASE_URL,
-      path: `/rest/v1/screenshots?employee_id=eq.${userId}`,
-      method: 'DELETE',
-      headers: {
-        'Authorization': `Bearer ${SERVICE_KEY}`,
-        'apikey': SERVICE_KEY,
-        'Prefer': 'return=minimal',
-      },
-    }
-    const req = https.request(options, (res) => {
-      let data = ''; res.on('data', c => { data += c }); res.on('end', () => resolve({ status: res.statusCode }))
-    })
-    req.on('error', reject)
-    req.end()
-  })
-  if (result.status >= 200 && result.status < 300) return { ok: true }
-  return { ok: false, error: `Status ${result.status}` }
-})
-
-// IPC: delete all ended work sessions + break_log, reset hours_worked to 0
-ipcMain.handle('clear-employee-history', async (_event, { userId }) => {
-  // Delete break_log (non-fatal — may be empty)
-  await new Promise((resolve) => {
-    const options = {
-      hostname: SUPABASE_URL,
-      path: `/rest/v1/break_log?employee_id=eq.${userId}`,
-      method: 'DELETE',
-      headers: { 'Authorization': `Bearer ${SERVICE_KEY}`, 'apikey': SERVICE_KEY, 'Prefer': 'return=minimal' },
-    }
-    const req = https.request(options, (res) => { res.on('data', () => {}); res.on('end', resolve) })
-    req.on('error', resolve)
-    req.end()
-  })
-
-  // Delete all ended sessions
-  const sessResult = await new Promise((resolve, reject) => {
-    const options = {
-      hostname: SUPABASE_URL,
-      path: `/rest/v1/work_sessions?employee_id=eq.${userId}&ended_at=not.is.null`,
-      method: 'DELETE',
-      headers: { 'Authorization': `Bearer ${SERVICE_KEY}`, 'apikey': SERVICE_KEY, 'Prefer': 'return=minimal' },
-    }
-    const req = https.request(options, (res) => {
-      let data = ''; res.on('data', c => { data += c }); res.on('end', () => resolve({ status: res.statusCode }))
-    })
-    req.on('error', reject)
-    req.end()
-  })
-
-  // Reset hours_worked to 0 on profile
-  const profileResult = await supabaseAdminPatch(`/rest/v1/profiles?id=eq.${userId}`, { hours_worked: 0 })
-
-  if (sessResult.status >= 200 && sessResult.status < 300 && profileResult.status >= 200 && profileResult.status < 300) {
-    return { ok: true }
-  }
-  return { ok: false, error: `sessions:${sessResult.status} profile:${profileResult.status}` }
-})
-
-// ── Supabase Storage helpers ──────────────────────────────────────────────────
-function supabaseStoragePut(storagePath, buffer, mimeType) {
-  return new Promise((resolve, reject) => {
-    const options = {
-      hostname: SUPABASE_URL,
-      path: `/storage/v1/object/${storagePath}`,
-      method: 'PUT',
-      headers: {
-        'Content-Type': mimeType,
-        'Authorization': `Bearer ${SERVICE_KEY}`,
-        'apikey': SERVICE_KEY,
-        'Content-Length': buffer.length,
-        'x-upsert': 'true',
-      },
-    }
-    const req = https.request(options, (res) => {
-      let data = ''
-      res.on('data', chunk => { data += chunk })
-      res.on('end', () => {
-        try { resolve({ status: res.statusCode, body: JSON.parse(data) }) }
-        catch { resolve({ status: res.statusCode, body: data }) }
-      })
-    })
-    req.on('error', reject)
-    req.write(buffer)
-    req.end()
-  })
-}
-
-// IPC: upload avatar image to Supabase Storage (service key, bypasses RLS)
+// IPC: write avatar to the local disk cache after the renderer uploads to Supabase Storage.
+// No service key — the renderer performs the actual Supabase Storage PUT using its own JWT.
 ipcMain.handle('upload-avatar', async (_event, { userId, base64, mimeType }) => {
-  // Ensure the avatars bucket exists (idempotent — ignore "already exists" error)
-  await supabaseAdminPost('/storage/v1/bucket', {
-    id: 'avatars', name: 'avatars', public: true,
-    fileSizeLimit: 5242880,
-    allowedMimeTypes: ['image/jpeg', 'image/png', 'image/webp', 'image/gif'],
-  }).catch(() => {})
-
   const ext = mimeType === 'image/png' ? 'png' : mimeType === 'image/webp' ? 'webp' : 'jpg'
-  const storagePath = `avatars/${userId}/avatar.${ext}`
-  const buffer = Buffer.from(base64, 'base64')
-  const result = await supabaseStoragePut(storagePath, buffer, mimeType)
-
-  if (result.status >= 200 && result.status < 300) {
-    const publicUrl = `https://${SUPABASE_URL}/storage/v1/object/public/${storagePath}`
-    // Simultaneously write to local disk cache so the image shows instantly next launch
-    try {
-      const dir = avatarCacheDir()
-      fs.mkdirSync(dir, { recursive: true })
-      // Remove any previous file for this user (ext might differ)
-      for (const e of ['jpg', 'png', 'webp']) {
-        const old = join(dir, `${userId}.${e}`)
-        if (fs.existsSync(old)) fs.unlinkSync(old)
-      }
-      fs.writeFileSync(join(dir, `${userId}.${ext}`), buffer)
-    } catch { /* non-fatal */ }
-    const dataUrl = `data:${mimeType};base64,${base64}`
-    return { ok: true, url: publicUrl, dataUrl }
-  }
-  return { ok: false, error: `Status ${result.status}: ${JSON.stringify(result.body)}` }
+  const publicUrl = `https://${SUPABASE_URL}/storage/v1/object/public/avatars/${userId}/avatar.${ext}`
+  try {
+    const dir = avatarCacheDir()
+    fs.mkdirSync(dir, { recursive: true })
+    for (const e of ['jpg', 'png', 'webp']) {
+      const old = join(dir, `${userId}.${e}`)
+      if (fs.existsSync(old)) fs.unlinkSync(old)
+    }
+    fs.writeFileSync(join(dir, `${userId}.${ext}`), Buffer.from(base64, 'base64'))
+  } catch { /* non-fatal — cache miss just means a network fetch on next launch */ }
+  return { ok: true, url: publicUrl }
 })
 
 // ── Local avatar disk cache ───────────────────────────────────────────────────
@@ -395,11 +75,11 @@ ipcMain.handle('avatar:fetch-many', async (_event, users) => {
       parsedPath = u.pathname + (u.search ? u.search : '')
     } catch { resolve(); return }
 
+    // Avatars bucket is public — no Authorization header needed
     const options = {
       hostname: SUPABASE_URL,
       path: parsedPath,
       method: 'GET',
-      headers: { 'Authorization': `Bearer ${SERVICE_KEY}`, 'apikey': SERVICE_KEY },
     }
     const req = https.request(options, (res) => {
       if (res.statusCode !== 200) { resolve(); return }
@@ -423,34 +103,8 @@ ipcMain.handle('avatar:fetch-many', async (_event, users) => {
   return result
 })
 
-// IPC: fetch screenshot images as base64 data URLs using service key
-ipcMain.handle('fetch-screenshot-images', async (_event, paths) => {
-  return Promise.all(paths.map(path => new Promise((resolve) => {
-    const options = {
-      hostname: SUPABASE_URL,
-      path: `/storage/v1/object/screenshots/${path}`,
-      method: 'GET',
-      headers: {
-        'Authorization': `Bearer ${SERVICE_KEY}`,
-        'apikey': SERVICE_KEY,
-      },
-    }
-    const req = https.request(options, (res) => {
-      const chunks = []
-      res.on('data', chunk => chunks.push(chunk))
-      res.on('end', () => {
-        if (res.statusCode === 200) {
-          const buf = Buffer.concat(chunks)
-          resolve('data:image/jpeg;base64,' + buf.toString('base64'))
-        } else {
-          resolve(null)
-        }
-      })
-    })
-    req.on('error', () => resolve(null))
-    req.end()
-  })))
-})
+// fetch-screenshot-images removed — screenshots are now fetched by the renderer
+// directly via supabase.storage.createSignedUrls() (see lib/edgeFunctions.js)
 
 // ── Privacy blur ─────────────────────────────────────────────────────────────
 // Three-pass sliding-window box blur on raw RGBA bitmap data.
@@ -612,61 +266,16 @@ let isOnBreak = false
 ipcMain.handle('set-break-status', (_event, val) => { isOnBreak = !!val })
 
 // ── Idle popup window ────────────────────────────────────────────────────────
-// A native always-on-top BrowserWindow that appears even when the main app
-// is minimised or in the background. Managed entirely by the main process.
+// A native always-on-top BrowserWindow shown even when the main app is minimised.
+// C3 fix: nodeIntegration disabled, contextIsolation enabled, dedicated preload.
+// The HTML lives in resources/idle-popup.html (no inline HTML, no require()).
+// The preload (idle-popup-preload.js) exposes ONLY window.idlePopupAPI.resume().
 
-const IDLE_POPUP_HTML = `<!DOCTYPE html><html><head><meta charset="UTF-8">
-<style>
-*{margin:0;padding:0;box-sizing:border-box}
-body{
-  font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
-  background:#0f172a;color:#e2e8f0;height:100vh;
-  display:flex;align-items:center;justify-content:center;
-  overflow:hidden;user-select:none;
-}
-.card{text-align:center;padding:28px 40px;width:100%}
-.icon{font-size:38px;margin-bottom:10px}
-h1{font-size:17px;font-weight:700;color:#f1f5f9;margin-bottom:6px}
-p{font-size:12px;color:#94a3b8;line-height:1.6;margin-bottom:18px}
-.timer{font-size:34px;font-weight:800;color:#f59e0b;margin-bottom:20px;
-  font-variant-numeric:tabular-nums;letter-spacing:-0.5px}
-.btn{
-  background:#6366f1;color:#fff;border:none;
-  padding:12px 0;border-radius:9px;width:100%;
-  font-size:14px;font-weight:600;cursor:pointer;
-  transition:background .12s,transform .08s;
-}
-.btn:hover{background:#4f46e5}
-.btn:active{transform:scale(.97)}
-.hint{font-size:11px;color:#475569;margin-top:10px;min-height:16px}
-</style></head>
-<body><div class="card">
-  <div class="icon">⏸</div>
-  <h1>Timer Paused</h1>
-  <p>No activity detected for 1 minute.<br>Idle time is not counted as salary.</p>
-  <div class="timer" id="t">0s</div>
-  <button class="btn" id="btn">▶&nbsp; Continue to work?</button>
-  <div class="hint" id="hint">Click anywhere 2 times to resume</div>
-</div>
-<script>
-const {ipcRenderer}=require('electron');
-let clicks=0;
-const startMs=Date.now();
-function fmt(s){
-  const h=Math.floor(s/3600),m=Math.floor((s%3600)/60),sec=s%60;
-  if(h>0)return h+'h '+m+'m';
-  if(m>0)return m+'m '+String(sec).padStart(2,'0')+'s';
-  return sec+'s';
-}
-setInterval(()=>{document.getElementById('t').textContent=fmt(Math.floor((Date.now()-startMs)/1000));},500);
-function resume(){ipcRenderer.send('idle-popup-continue');}
-document.getElementById('btn').addEventListener('click',e=>{e.stopPropagation();resume();});
-document.addEventListener('click',()=>{
-  clicks++;
-  if(clicks>=2){resume();}
-  else{document.getElementById('hint').textContent='Click '+(2-clicks)+' more time to resume';}
-});
-</script></body></html>`
+const IDLE_POPUP_PATH = app.isPackaged
+  ? join(process.resourcesPath, 'idle-popup.html')
+  : join(app.getAppPath(), 'resources', 'idle-popup.html')
+
+const IDLE_POPUP_PRELOAD = join(__dirname, '../preload/idle-popup-preload.js')
 
 let idlePopupWin = null
 
@@ -682,10 +291,15 @@ function showIdlePopup() {
     skipTaskbar: false,
     title: 'PharmaStaff Hub — Timer Paused',
     autoHideMenuBar: true,
-    webPreferences: { nodeIntegration: true, contextIsolation: false },
+    webPreferences: {
+      nodeIntegration:   false,   // was true  — C3 fix
+      contextIsolation:  true,    // was false — C3 fix
+      sandbox:           true,    // renderer runs in OS sandbox
+      preload:           IDLE_POPUP_PRELOAD,
+    },
   })
   idlePopupWin.setAlwaysOnTop(true, 'screen-saver')
-  idlePopupWin.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(IDLE_POPUP_HTML))
+  idlePopupWin.loadFile(IDLE_POPUP_PATH)
   idlePopupWin.on('closed', () => { idlePopupWin = null })
 }
 
@@ -725,6 +339,115 @@ function setupActivityMonitor() {
     }
   }, 10 * 1000)
 }
+
+// ── Hubstaff-style per-second activity tracker ───────────────────────────────
+// Every second checks powerMonitor.getSystemIdleTime() === 0 (any OS-level input
+// in the last second counts as active). No keylogging — only binary active/inactive.
+// Emits 'activity-block' to the renderer at the end of each 600-second window
+// and 'activity-tick' every 10 s for live UI updates.
+
+const ACTIVITY_BLOCK_SECS = 600 // 10 minutes
+
+const activityTracker = {
+  _interval: null,
+  employeeId: null,
+  sessionId: null,
+  idleTimeoutSecs: 5 * 60, // admin-configurable, default 5 min
+  discardIdle: true,        // whether idle time is excluded from paid hours
+
+  // current block accumulators
+  _blockStart: null,
+  _blockActiveSecs: 0,
+  _blockTotalSecs: 0,
+  _blockWasIdle: false,
+  _consecutiveIdleSecs: 0,
+
+  configure({ idleTimeoutMins, discardIdle }) {
+    const mins = Math.max(1, Math.min(10, idleTimeoutMins || 5))
+    this.idleTimeoutSecs = mins * 60
+    if (discardIdle !== undefined) this.discardIdle = !!discardIdle
+  },
+
+  _resetBlock() {
+    this._blockStart = new Date()
+    this._blockActiveSecs = 0
+    this._blockTotalSecs = 0
+    this._blockWasIdle = false
+    this._consecutiveIdleSecs = 0
+  },
+
+  _buildBlock() {
+    const total = this._blockTotalSecs
+    return {
+      employee_id: this.employeeId,
+      session_id: this.sessionId,
+      block_start: this._blockStart.toISOString(),
+      block_end: new Date().toISOString(),
+      active_seconds: this._blockActiveSecs,
+      total_seconds: total,
+      activity_percent: total > 0
+        ? Math.round((this._blockActiveSecs / total) * 1000) / 10
+        : 0,
+      was_idle: this._blockWasIdle,
+      discard_idle: this.discardIdle,
+    }
+  },
+
+  _tick() {
+    // idleSecs === 0 means input happened within the last second
+    const idleSecs = powerMonitor.getSystemIdleTime()
+    if (idleSecs === 0) {
+      this._blockActiveSecs++
+      this._consecutiveIdleSecs = 0
+    } else {
+      this._consecutiveIdleSecs++
+      if (this._consecutiveIdleSecs >= this.idleTimeoutSecs) {
+        this._blockWasIdle = true
+      }
+    }
+    this._blockTotalSecs++
+
+    // Live update every 10 s
+    if (this._blockTotalSecs % 10 === 0 && win && !win.isDestroyed()) {
+      win.webContents.send('activity-tick', {
+        blockActiveSecs: this._blockActiveSecs,
+        blockTotalSecs: this._blockTotalSecs,
+        activityPct: Math.round((this._blockActiveSecs / this._blockTotalSecs) * 100),
+        wasIdle: this._blockWasIdle,
+      })
+    }
+
+    // Block complete — emit and start next block
+    if (this._blockTotalSecs >= ACTIVITY_BLOCK_SECS) {
+      const block = this._buildBlock()
+      if (win && !win.isDestroyed()) win.webContents.send('activity-block', block)
+      this._resetBlock()
+    }
+  },
+
+  start({ employeeId, sessionId }) {
+    this.stop() // clear any previous run
+    this.employeeId = employeeId
+    this.sessionId  = sessionId
+    this._resetBlock()
+    this._interval = setInterval(() => this._tick(), 1000)
+  },
+
+  stop() {
+    if (!this._interval) return null
+    clearInterval(this._interval)
+    this._interval = null
+    const block = this._blockTotalSecs > 0 ? this._buildBlock() : null
+    this._resetBlock()
+    this.employeeId = null
+    this.sessionId  = null
+    return block
+  },
+}
+
+ipcMain.handle('activity:start',     (_e, data) => { activityTracker.start(data) })
+ipcMain.handle('activity:stop',      ()         => activityTracker.stop())
+ipcMain.handle('activity:configure', (_e, cfg)  => { activityTracker.configure(cfg) })
 
 const PROTOCOL = 'salary-app'
 let win = null

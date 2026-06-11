@@ -1,9 +1,12 @@
 import { useState, useEffect, useCallback } from 'react'
+import { serverNow } from '../lib/serverTime'
 import {
   FileText, Calendar, Users, Clock, DollarSign, TrendingUp,
-  ChevronDown, ChevronUp, Download, ShieldAlert, ShieldCheck, Camera, X
+  ChevronDown, ChevronUp, Download, ShieldAlert, ShieldCheck, Camera, X,
+  Search, Activity, CheckCircle2
 } from 'lucide-react'
 import { supabase } from '../lib/supabase'
+import { fetchScreenshotUrls } from '../lib/edgeFunctions'
 import UserAvatar from './UserAvatar'
 
 const NY = 'America/New_York'
@@ -44,7 +47,7 @@ function matchesProhibited(screenshot, patterns) {
   return patterns.find(p => app.includes(p.pattern) || title.includes(p.pattern)) || null
 }
 
-// ── Shared helpers ────────────────────────────────────────────────────────────
+// ── Helpers ───────────────────────────────────────────────────────────────────
 const DEPT_COLORS = [
   '#6366f1','#8b5cf6','#ec4899','#f59e0b','#10b981',
   '#3b82f6','#14b8a6','#f97316','#ef4444','#06b6d4',
@@ -87,38 +90,87 @@ function actPct(session) {
   const idleSecs  = Number(session.accumulated_idle_secs) || 0
   return Math.round((Math.max(0, totalSecs - idleSecs) / totalSecs) * 100)
 }
+function nyMidnightMs(nowMs) {
+  const now = new Date(nowMs)
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: NY, year: 'numeric', month: 'numeric', day: 'numeric',
+    hour: 'numeric', minute: 'numeric', second: 'numeric', hour12: false,
+  }).formatToParts(now)
+  const get = t => +parts.find(p => p.type === t).value
+  const [y, mo, d, h, mn, sc] = [get('year'), get('month'), get('day'), get('hour'), get('minute'), get('second')]
+  const nyWallMs   = Date.UTC(y, mo - 1, d, h, mn, sc)
+  const nyOffsetMs = now.getTime() - nyWallMs
+  return { midnight: Date.UTC(y, mo - 1, d, 0, 0, 0) + nyOffsetMs, y, mo, d, dow: new Date(Date.UTC(y, mo - 1, d)).getUTCDay() }
+}
 function getRange(periodId) {
-  const now = new Date()
-  if (periodId === 'alltime') return { start: null, end: null }
-  if (periodId === 'today') {
-    const s = new Date(now); s.setHours(0, 0, 0, 0)
-    return { start: s, end: now }
-  }
+  const nowMs = serverNow()
+  const now   = new Date(nowMs)
+  if (periodId === 'alltime') return { start: null, end: now }
+  const { midnight, y, mo, dow } = nyMidnightMs(nowMs)
+  if (periodId === 'today') return { start: new Date(midnight), end: now }
   if (periodId === 'week') {
-    const s = new Date(now)
-    const day = s.getDay()
-    s.setDate(s.getDate() - (day === 0 ? 6 : day - 1))
-    s.setHours(0, 0, 0, 0)
-    return { start: s, end: now }
+    const daysFromMonday = dow === 0 ? 6 : dow - 1
+    return { start: new Date(midnight - daysFromMonday * 86_400_000), end: now }
   }
   if (periodId === 'month') {
-    return { start: new Date(now.getFullYear(), now.getMonth(), 1), end: now }
+    const { midnight: monthStart } = nyMidnightMs(Date.UTC(y, mo - 1, 1, 12, 0, 0))
+    return { start: new Date(monthStart), end: now }
   }
-  return { start: null, end: null }
+  return { start: null, end: now }
 }
 
-const PERIOD_LABELS = { today: 'Today', week: 'This Week', month: 'This Month', alltime: 'All Time' }
+const PERIODS = [
+  { id: 'today',   label: 'Daily'    },
+  { id: 'week',    label: 'Weekly'   },
+  { id: 'month',   label: 'Monthly'  },
+  { id: 'alltime', label: 'All Time' },
+]
+
+const SUBTABS = [
+  { id: 'overview',   label: 'Overview'      },
+  { id: 'byworker',   label: 'By Worker'     },
+  { id: 'log',        label: 'Sessions Log'  },
+  { id: 'violations', label: 'Violations'    },
+]
+
+// Returns true if the session's clock-in time (in NY tz) is after the dept's work_start
+function checkLate(startedAt, dept, deptSchedules) {
+  if (!deptSchedules || !dept || !startedAt) return false
+  const sched = deptSchedules[dept]
+  if (!sched?.work_start) return false
+  const [wH, wM] = sched.work_start.split(':').map(Number)
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: NY, hour: 'numeric', minute: 'numeric', hour12: false,
+  }).formatToParts(new Date(startedAt))
+  const h = Number(parts.find(p => p.type === 'hour').value)
+  const m = Number(parts.find(p => p.type === 'minute').value)
+  return h * 60 + m > wH * 60 + wM
+}
+
+function getPeriodStr(period) {
+  const now = new Date()
+  if (period === 'today') return now.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
+  if (period === 'week') {
+    const { start } = getRange('week')
+    return `${start.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} – ${now.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`
+  }
+  if (period === 'month') return now.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
+  return 'All Time'
+}
 
 // ── Root component ────────────────────────────────────────────────────────────
-export default function ReportsView({ managedDept }) {
-  const [period,         setPeriod]         = useState('today')
-  const [viewMode,       setViewMode]       = useState('worker') // 'worker' | 'log' | 'violations'
-  const [deptFilter,     setDeptFilter]     = useState('all')
-  const [sessions,       setSessions]       = useState([])
-  const [profiles,       setProfiles]       = useState({})
-  const [depts,          setDepts]          = useState([])
-  const [loading,        setLoading]        = useState(true)
-  const [expandedWorker, setExpandedWorker] = useState(null)
+export default function ReportsView({ managedDept, deptSchedules = {} }) {
+  const [period,        setPeriod]        = useState('today')
+  const [subTab,        setSubTab]        = useState('overview')
+  const [deptFilter,    setDeptFilter]    = useState('all')
+  const [statusFilter,  setStatusFilter]  = useState('all')
+  const [search,        setSearch]        = useState('')
+  const [page,          setPage]          = useState(1)
+  const [sessions,      setSessions]      = useState([])
+  const [profiles,      setProfiles]      = useState({})
+  const [depts,         setDepts]         = useState([])
+  const [loading,       setLoading]       = useState(true)
+  const [expandedWorker,setExpandedWorker]= useState(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -143,20 +195,23 @@ export default function ReportsView({ managedDept }) {
   }, [period, managedDept])
 
   useEffect(() => { load() }, [load])
-  useEffect(() => { setExpandedWorker(null) }, [period, viewMode, deptFilter])
+  useEffect(() => { setExpandedWorker(null); setPage(1) }, [period, subTab, deptFilter])
 
   const filtered = sessions.filter(s => {
     const prof = profiles[s.employee_id]
     if (!prof) return false
     if (managedDept && prof.department !== managedDept) return false
     if (deptFilter !== 'all' && prof.department !== deptFilter) return false
+    if (statusFilter === 'active' && s.ended_at) return false
+    if (statusFilter === 'completed' && !s.ended_at) return false
     return true
   })
 
-  const completed    = filtered.filter(s => s.ended_at)
-  const totalHours   = completed.reduce((sum, s) => sum + (Number(s.duration_hours) || 0), 0)
-  const totalEarned  = completed.reduce((sum, s) => sum + (Number(s.duration_hours) || 0) * (Number(profiles[s.employee_id]?.hourly_rate) || 0), 0)
-  const avgActivity  = completed.length ? Math.round(completed.reduce((sum, s) => sum + (actPct(s) ?? 100), 0) / completed.length) : null
+  const completed     = filtered.filter(s => s.ended_at)
+  const activeNow     = filtered.filter(s => !s.ended_at)
+  const totalHours    = completed.reduce((sum, s) => sum + (Number(s.duration_hours) || 0), 0)
+  const totalEarned   = completed.reduce((sum, s) => sum + (Number(s.duration_hours) || 0) * (Number(profiles[s.employee_id]?.hourly_rate) || 0), 0)
+  const avgActivity   = completed.length ? Math.round(completed.reduce((sum, s) => sum + (actPct(s) ?? 100), 0) / completed.length) : null
   const uniqueWorkers = new Set(filtered.map(s => s.employee_id)).size
 
   function exportCSV() {
@@ -182,102 +237,320 @@ export default function ReportsView({ managedDept }) {
     const url  = URL.createObjectURL(blob)
     const a    = document.createElement('a')
     a.href     = url
-    a.download = `PharmaStaff_Report_${PERIOD_LABELS[period].replace(' ','')}_${new Date().toISOString().slice(0,10)}.csv`
+    a.download = `PharmaStaff_Report_${period}_${new Date().toISOString().slice(0, 10)}.csv`
     a.click()
     URL.revokeObjectURL(url)
   }
 
-  const isViolations = viewMode === 'violations'
+  const SEL = {
+    padding: '6px 10px', borderRadius: 7, border: '1px solid #e2e8f0',
+    fontSize: 13, color: '#374151', background: '#fff', cursor: 'pointer',
+  }
 
   return (
-    <div className="rep-wrap">
-      {/* Header */}
-      <div className="rep-header">
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: '#f1f5f9', overflow: 'hidden' }}>
+
+      {/* ── Page Header ── */}
+      <div style={{ background: '#fff', borderBottom: '1px solid #e2e8f0', padding: '14px 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
         <div>
-          <h2 className="rep-title">Attendance Reports</h2>
-          <p className="rep-sub">
-            {isViolations
-              ? `Prohibited app usage detected from screenshots${managedDept ? ` — ${managedDept}` : ''}`
-              : `Clock-in / clock-out records, hours worked, and earnings${managedDept ? ` — ${managedDept}` : ''}`}
-          </p>
+          <h2 style={{ margin: 0, fontSize: 20, fontWeight: 700, color: '#0f172a' }}>Reports</h2>
+          <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 3, display: 'flex', alignItems: 'center', gap: 4 }}>
+            <span>Home</span><span>›</span><span>Reports</span><span>›</span>
+            <span style={{ color: '#2563eb' }}>{PERIODS.find(p => p.id === period)?.label} Report</span>
+          </div>
         </div>
-        {!isViolations && (
-          <button className="rep-export-btn" onClick={exportCSV} disabled={filtered.length === 0}>
-            <Download size={14} />
-            Export CSV
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button
+            onClick={exportCSV}
+            disabled={filtered.length === 0}
+            style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '7px 14px', borderRadius: 7, border: '1px solid #e2e8f0', background: '#fff', color: '#374151', fontSize: 13, fontWeight: 500, cursor: filtered.length === 0 ? 'default' : 'pointer', opacity: filtered.length === 0 ? 0.5 : 1 }}
+          >
+            <Download size={13} /> Export
           </button>
-        )}
+          <button
+            onClick={load}
+            style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '7px 16px', borderRadius: 7, border: 'none', background: '#2563eb', color: '#fff', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}
+          >
+            Generate Report
+          </button>
+        </div>
       </div>
 
-      {/* Toolbar */}
-      <div className="rep-toolbar">
-        <div className="rep-period-tabs">
-          {Object.entries(PERIOD_LABELS).map(([id, label]) => (
-            <button key={id} className={`rep-period-tab ${period === id ? 'rep-period-active' : ''}`} onClick={() => setPeriod(id)}>
-              {label}
+      {/* ── Period + Date Bar ── */}
+      <div style={{ background: '#fff', borderBottom: '1px solid #e2e8f0', padding: '10px 24px', display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0 }}>
+        <div style={{ display: 'flex', background: '#f1f5f9', borderRadius: 8, padding: 3, gap: 2 }}>
+          {PERIODS.map(p => (
+            <button
+              key={p.id}
+              onClick={() => { setPeriod(p.id); setPage(1) }}
+              style={{ padding: '5px 16px', borderRadius: 6, border: 'none', cursor: 'pointer', fontSize: 13, fontWeight: 500, background: period === p.id ? '#2563eb' : 'transparent', color: period === p.id ? '#fff' : '#64748b', transition: 'all 0.15s' }}
+            >
+              {p.label}
             </button>
           ))}
         </div>
-        <div className="rep-toolbar-right">
-          {!managedDept && depts.length > 1 && (
-            <select className="rep-dept-select" value={deptFilter} onChange={e => setDeptFilter(e.target.value)}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#475569', fontSize: 13, border: '1px solid #e2e8f0', borderRadius: 7, padding: '5px 12px', background: '#fff' }}>
+          <Calendar size={13} style={{ color: '#94a3b8' }} />
+          {getPeriodStr(period)}
+        </div>
+      </div>
+
+      {/* ── Filter Bar ── */}
+      <div style={{ background: '#fff', borderBottom: '1px solid #e2e8f0', padding: '10px 24px', display: 'flex', gap: 16, alignItems: 'flex-end', flexShrink: 0, flexWrap: 'wrap' }}>
+        {!managedDept && depts.length > 0 && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+            <label style={{ fontSize: 10, color: '#94a3b8', fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5 }}>Department</label>
+            <select value={deptFilter} onChange={e => { setDeptFilter(e.target.value); setPage(1) }} style={SEL}>
               <option value="all">All Departments</option>
               {depts.map(d => <option key={d} value={d}>{d}</option>)}
             </select>
-          )}
-          <div className="rep-view-toggle">
-            <button className={`rep-view-btn ${viewMode === 'worker' ? 'rep-view-active' : ''}`} onClick={() => setViewMode('worker')}>
-              <Users size={12} />By Worker
+          </div>
+        )}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+          <label style={{ fontSize: 10, color: '#94a3b8', fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5 }}>Status</label>
+          <select value={statusFilter} onChange={e => { setStatusFilter(e.target.value); setPage(1) }} style={SEL}>
+            <option value="all">All Status</option>
+            <option value="active">Active</option>
+            <option value="completed">Completed</option>
+          </select>
+        </div>
+      </div>
+
+      {/* ── Stats Row ── */}
+      {subTab !== 'violations' && (
+        <div style={{ padding: '14px 24px', display: 'flex', gap: 10, flexShrink: 0, flexWrap: 'wrap' }}>
+          {[
+            { icon: <Users size={18} />, bg: '#eff6ff', clr: '#3b82f6', val: uniqueWorkers, label: 'Total Workers' },
+            { icon: <CheckCircle2 size={18} />, bg: '#f0fdf4', clr: '#22c55e', val: `${activeNow.length}${uniqueWorkers > 0 ? ` (${Math.round(activeNow.length / Math.max(uniqueWorkers, 1) * 100)}%)` : ''}`, vClr: '#16a34a', label: 'Active Now' },
+            { icon: <Calendar size={18} />, bg: '#faf5ff', clr: '#a855f7', val: filtered.length, label: 'Sessions' },
+            { icon: <Clock size={18} />, bg: '#eff6ff', clr: '#3b82f6', val: `${totalHours.toFixed(1)}h`, label: 'Total Hours' },
+            { icon: <DollarSign size={18} />, bg: '#f0fdf4', clr: '#22c55e', val: fmtCurrency(totalEarned), sm: true, label: 'Total Salary' },
+            { icon: <Activity size={18} />, bg: '#fff7ed', clr: '#f97316', val: avgActivity !== null ? `${avgActivity}%` : '—', label: 'Avg Activity' },
+          ].map((s, i) => (
+            <div key={i} style={{ background: '#fff', borderRadius: 10, border: '1px solid #e2e8f0', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 12, flex: '1 1 140px', minWidth: 120 }}>
+              <div style={{ width: 38, height: 38, borderRadius: 9, background: s.bg, color: s.clr, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                {s.icon}
+              </div>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: s.sm ? 15 : 20, fontWeight: 700, color: s.vClr || '#0f172a', lineHeight: 1.15, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.val}</div>
+                <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 2 }}>{s.label}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* ── Sub-tab Nav ── */}
+      <div style={{ background: '#fff', borderBottom: '1px solid #e2e8f0', padding: '0 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
+        <div style={{ display: 'flex' }}>
+          {SUBTABS.map(t => (
+            <button
+              key={t.id}
+              onClick={() => { setSubTab(t.id); setPage(1); setExpandedWorker(null); setSearch('') }}
+              style={{ padding: '11px 16px', border: 'none', background: 'none', cursor: 'pointer', fontSize: 13, fontWeight: subTab === t.id ? 600 : 400, color: subTab === t.id ? (t.id === 'violations' ? '#ef4444' : '#2563eb') : '#64748b', borderBottom: subTab === t.id ? `2px solid ${t.id === 'violations' ? '#ef4444' : '#2563eb'}` : '2px solid transparent', transition: 'all 0.15s', whiteSpace: 'nowrap' }}
+            >
+              {t.id === 'violations' && <ShieldAlert size={12} style={{ display: 'inline', marginRight: 5, verticalAlign: 'middle' }} />}
+              {t.label}
             </button>
-            <button className={`rep-view-btn ${viewMode === 'log' ? 'rep-view-active' : ''}`} onClick={() => setViewMode('log')}>
-              <FileText size={12} />Sessions Log
-            </button>
-            <button className={`rep-view-btn rep-view-btn-danger ${viewMode === 'violations' ? 'rep-view-active-danger' : ''}`} onClick={() => setViewMode('violations')}>
-              <ShieldAlert size={12} />Violations
-            </button>
+          ))}
+        </div>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '6px 0' }}>
+          <div style={{ position: 'relative' }}>
+            <Search size={12} style={{ position: 'absolute', left: 9, top: '50%', transform: 'translateY(-50%)', color: '#94a3b8', pointerEvents: 'none' }} />
+            <input
+              value={search}
+              onChange={e => { setSearch(e.target.value); setPage(1) }}
+              placeholder="Search worker…"
+              style={{ paddingLeft: 28, paddingRight: 10, paddingTop: 6, paddingBottom: 6, borderRadius: 7, border: '1px solid #e2e8f0', fontSize: 12, color: '#374151', width: 190, outline: 'none', background: '#f8fafc' }}
+            />
           </div>
         </div>
       </div>
 
-      {/* Summary stats — hidden in violations mode (violations has its own) */}
-      {!isViolations && (
-        <div className="rep-stats">
-          <div className="rep-stat-card">
-            <div className="rep-stat-icon" style={{ background: '#6366f112', color: '#6366f1' }}><Users size={18} /></div>
-            <div className="rep-stat-body"><span className="rep-stat-num">{uniqueWorkers}</span><span className="rep-stat-lbl">Workers</span></div>
-          </div>
-          <div className="rep-stat-card">
-            <div className="rep-stat-icon" style={{ background: '#3b82f612', color: '#3b82f6' }}><Calendar size={18} /></div>
-            <div className="rep-stat-body"><span className="rep-stat-num">{filtered.length}</span><span className="rep-stat-lbl">Sessions</span></div>
-          </div>
-          <div className="rep-stat-card">
-            <div className="rep-stat-icon" style={{ background: '#10b98112', color: '#10b981' }}><Clock size={18} /></div>
-            <div className="rep-stat-body"><span className="rep-stat-num">{totalHours.toFixed(1)}h</span><span className="rep-stat-lbl">Total Hours</span></div>
-          </div>
-          <div className="rep-stat-card">
-            <div className="rep-stat-icon" style={{ background: '#f59e0b12', color: '#f59e0b' }}><TrendingUp size={18} /></div>
-            <div className="rep-stat-body"><span className="rep-stat-num">{avgActivity !== null ? `${avgActivity}%` : '—'}</span><span className="rep-stat-lbl">Avg Activity</span></div>
-          </div>
-          <div className="rep-stat-card">
-            <div className="rep-stat-icon" style={{ background: '#05966912', color: '#059669' }}><DollarSign size={18} /></div>
-            <div className="rep-stat-body"><span className="rep-stat-num">{fmtCurrency(totalEarned)}</span><span className="rep-stat-lbl">Total Earned</span></div>
-          </div>
-        </div>
-      )}
-
-      {/* Content */}
-      {isViolations ? (
-        <ViolationsView period={period} managedDept={managedDept} deptFilter={deptFilter} profiles={profiles} />
-      ) : loading ? (
-        <div className="rep-state">Loading report…</div>
-      ) : filtered.length === 0 ? (
-        <div className="rep-state">No sessions found for this period.</div>
-      ) : viewMode === 'worker' ? (
-        <WorkerView sessions={filtered} profiles={profiles} expandedWorker={expandedWorker} setExpandedWorker={setExpandedWorker} />
-      ) : (
-        <SessionsLog sessions={filtered} profiles={profiles} />
-      )}
+      {/* ── Content ── */}
+      <div style={{ flex: 1, overflowY: 'auto', padding: '16px 24px 24px' }}>
+        {loading ? (
+          <div className="rep-state">Loading report…</div>
+        ) : subTab === 'violations' ? (
+          <ViolationsView period={period} managedDept={managedDept} deptFilter={deptFilter} profiles={profiles} />
+        ) : subTab === 'byworker' ? (
+          <WorkerView sessions={filtered} profiles={profiles} expandedWorker={expandedWorker} setExpandedWorker={setExpandedWorker} search={search} deptSchedules={deptSchedules} />
+        ) : subTab === 'log' ? (
+          <SessionsLog sessions={filtered} profiles={profiles} search={search} />
+        ) : filtered.length === 0 ? (
+          <div className="rep-state">No sessions found for this period.</div>
+        ) : (
+          <OverviewTable sessions={filtered} profiles={profiles} search={search} page={page} setPage={setPage} deptSchedules={deptSchedules} />
+        )}
+      </div>
     </div>
+  )
+}
+
+// ── Overview Table ────────────────────────────────────────────────────────────
+const PAGE_SIZE = 10
+
+function OverviewTable({ sessions, profiles, search, page, setPage, deptSchedules }) {
+  const searched = search
+    ? sessions.filter(s => {
+        const prof = profiles[s.employee_id]
+        const q = search.toLowerCase()
+        return (prof?.full_name || prof?.email || '').toLowerCase().includes(q)
+          || (prof?.department || '').toLowerCase().includes(q)
+      })
+    : sessions
+
+  const total      = searched.length
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
+  const safePage   = Math.min(page, totalPages)
+  const pageItems  = searched.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE)
+
+  if (total === 0) return <div className="rep-state">No sessions match your search.</div>
+
+  const TH = { fontSize: 11, color: '#64748b', fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5, padding: '10px 12px', whiteSpace: 'nowrap', textAlign: 'left', background: '#f8fafc', borderBottom: '1px solid #e2e8f0' }
+  const TD = { padding: '10px 12px', fontSize: 13, color: '#374151', verticalAlign: 'middle', borderBottom: '1px solid #f1f5f9' }
+
+  // build page buttons: show up to 5 page numbers
+  const pageNums = []
+  if (totalPages <= 5) {
+    for (let i = 1; i <= totalPages; i++) pageNums.push(i)
+  } else if (safePage <= 3) {
+    pageNums.push(1, 2, 3, 4, 5)
+  } else if (safePage >= totalPages - 2) {
+    for (let i = totalPages - 4; i <= totalPages; i++) pageNums.push(i)
+  } else {
+    for (let i = safePage - 2; i <= safePage + 2; i++) pageNums.push(i)
+  }
+
+  return (
+    <div style={{ background: '#fff', borderRadius: 10, border: '1px solid #e2e8f0', overflow: 'hidden' }}>
+      <div style={{ overflowX: 'auto' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 900 }}>
+          <thead>
+            <tr>
+              <th style={{ ...TH, width: 38, textAlign: 'center' }}>#</th>
+              <th style={TH}>Worker</th>
+              <th style={TH}>Department</th>
+              <th style={TH}>Status</th>
+              <th style={TH}>Clock In</th>
+              <th style={TH}>Clock Out</th>
+              <th style={TH}>Duration</th>
+              <th style={TH}>Idle (min)</th>
+              <th style={TH}>Activity (%)</th>
+              <th style={{ ...TH, textAlign: 'right' }}>Earned ($)</th>
+              <th style={TH}>Remarks</th>
+            </tr>
+          </thead>
+          <tbody>
+            {pageItems.map((s, i) => {
+              const prof     = profiles[s.employee_id]
+              if (!prof) return null
+              const isActive = !s.ended_at
+              const late     = checkLate(s.started_at, prof.department, deptSchedules)
+              const hours    = Number(s.duration_hours) || 0
+              const idleMin  = Math.round((Number(s.accumulated_idle_secs) || 0) / 60)
+              const pct      = actPct(s)
+              const rate     = Number(prof.hourly_rate) || 0
+              const color    = deptColor(prof.department)
+              const rowNum   = (safePage - 1) * PAGE_SIZE + i + 1
+              const remarks  = !isActive && idleMin > 30 ? `High idle (${idleMin}m)` : '—'
+              const remarkClr= idleMin > 30 ? '#f59e0b' : '#94a3b8'
+
+              return (
+                <tr key={s.id} style={{ background: i % 2 === 1 ? '#fafafa' : '#fff' }}>
+                  <td style={{ ...TD, textAlign: 'center', color: '#94a3b8', fontSize: 12 }}>{rowNum}</td>
+                  <td style={TD}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+                      <UserAvatar
+                        userId={prof.id} name={prof.full_name} avatarUrl={prof.avatar_url}
+                        className="rep-avatar"
+                        style={{ width: 30, height: 30, fontSize: 11, background: color + '18', color, border: `1.5px solid ${color}35`, flexShrink: 0 }}
+                      />
+                      <div>
+                        <div style={{ fontWeight: 500, color: '#0f172a', fontSize: 13, whiteSpace: 'nowrap' }}>{prof.full_name || prof.email}</div>
+                        {prof.position && <div style={{ fontSize: 11, color: '#94a3b8' }}>{prof.position}</div>}
+                      </div>
+                    </div>
+                  </td>
+                  <td style={TD}>
+                    {prof.department
+                      ? <span style={{ display: 'inline-block', padding: '2px 9px', borderRadius: 5, background: color + '14', color, border: `1px solid ${color}28`, fontSize: 12, fontWeight: 500, whiteSpace: 'nowrap' }}>{prof.department}</span>
+                      : <span style={{ color: '#94a3b8' }}>—</span>}
+                  </td>
+                  <td style={TD}>
+                    {late
+                      ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '3px 10px', borderRadius: 20, background: '#fef2f2', color: '#dc2626', fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap', border: '1px solid #fecaca' }}>
+                          <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#dc2626', flexShrink: 0 }} />Late{isActive ? ' · Active' : ''}
+                        </span>
+                      : isActive
+                        ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '3px 10px', borderRadius: 20, background: '#dcfce7', color: '#16a34a', fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap' }}>
+                            <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#16a34a', flexShrink: 0 }} />Active
+                          </span>
+                        : <span style={{ display: 'inline-block', padding: '3px 10px', borderRadius: 20, background: '#f1f5f9', color: '#64748b', fontSize: 12, fontWeight: 500, whiteSpace: 'nowrap' }}>Completed</span>}
+                  </td>
+                  <td style={{ ...TD, fontFamily: 'monospace', fontSize: 12 }}>{fmtTime(s.started_at)}</td>
+                  <td style={{ ...TD, fontFamily: 'monospace', fontSize: 12 }}>{isActive ? <span style={{ color: '#94a3b8' }}>—</span> : fmtTime(s.ended_at)}</td>
+                  <td style={{ ...TD, fontFamily: 'monospace', fontSize: 12 }}>{isActive ? <span style={{ color: '#94a3b8' }}>—</span> : `${hours.toFixed(2)}h`}</td>
+                  <td style={{ ...TD, fontFamily: 'monospace', fontSize: 12 }}>
+                    {idleMin > 0
+                      ? <span style={{ color: '#f97316', fontWeight: 600 }}>{idleMin}</span>
+                      : <span style={{ color: '#94a3b8' }}>0</span>}
+                  </td>
+                  <td style={TD}>
+                    {pct !== null
+                      ? <span style={{ fontWeight: 600, fontSize: 13, color: pct >= 80 ? '#16a34a' : pct >= 50 ? '#f59e0b' : '#ef4444' }}>{pct}%</span>
+                      : <span style={{ color: '#94a3b8' }}>—</span>}
+                  </td>
+                  <td style={{ ...TD, textAlign: 'right', fontWeight: 600, fontSize: 13 }}>
+                    {isActive
+                      ? <span style={{ color: '#94a3b8', fontSize: 11, fontWeight: 400 }}>—</span>
+                      : fmtCurrency(hours * rate)}
+                  </td>
+                  <td style={{ ...TD, fontSize: 12, color: remarkClr, fontWeight: isActive || idleMin > 30 ? 500 : 400 }}>{remarks}</td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Pagination */}
+      <div style={{ padding: '11px 16px', borderTop: '1px solid #f1f5f9', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <span style={{ fontSize: 12, color: '#64748b' }}>
+          Showing {Math.min((safePage - 1) * PAGE_SIZE + 1, total)} to {Math.min(safePage * PAGE_SIZE, total)} of {total} entries
+        </span>
+        <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+          <PgBtn disabled={safePage === 1} onClick={() => setPage(p => Math.max(1, p - 1))}>‹</PgBtn>
+          {pageNums.map(p => (
+            <PgBtn key={p} active={safePage === p} onClick={() => setPage(p)}>{p}</PgBtn>
+          ))}
+          {totalPages > 5 && safePage < totalPages - 2 && <span style={{ fontSize: 12, color: '#94a3b8', padding: '0 2px' }}>…</span>}
+          {totalPages > 5 && safePage < totalPages - 2 && (
+            <PgBtn active={safePage === totalPages} onClick={() => setPage(totalPages)}>{totalPages}</PgBtn>
+          )}
+          <PgBtn disabled={safePage === totalPages} onClick={() => setPage(p => Math.min(totalPages, p + 1))}>›</PgBtn>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function PgBtn({ onClick, disabled, active, children }) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      style={{
+        padding: '4px 10px', minWidth: 32, borderRadius: 5, border: '1px solid',
+        borderColor: active ? '#2563eb' : '#e2e8f0',
+        background: active ? '#2563eb' : '#fff',
+        color: disabled ? '#cbd5e1' : active ? '#fff' : '#374151',
+        cursor: disabled ? 'default' : 'pointer',
+        fontSize: 13, fontWeight: active ? 600 : 400,
+      }}
+    >
+      {children}
+    </button>
   )
 }
 
@@ -288,11 +561,10 @@ function ViolationsView({ period, managedDept, deptFilter, profiles }) {
   const [loading,       setLoading]       = useState(true)
   const [refreshKey,    setRefreshKey]    = useState(0)
   const [expandedWorker,setExpandedWorker]= useState(null)
-  const [loadedImages,  setLoadedImages]  = useState({}) // { empId: string[] }
+  const [loadedImages,  setLoadedImages]  = useState({})
   const [loadingImages, setLoadingImages] = useState(null)
-  const [lightbox,      setLightbox]      = useState(null) // { url, meta }
+  const [lightbox,      setLightbox]      = useState(null)
 
-  // Re-read patterns from localStorage each time this view mounts / period changes
   useEffect(() => { setPatterns(loadProhibited()) }, [period])
 
   useEffect(() => {
@@ -301,8 +573,6 @@ function ViolationsView({ period, managedDept, deptFilter, profiles }) {
       setExpandedWorker(null)
       setLoadedImages({})
       const { start, end } = getRange(period)
-
-      // Supabase REST API caps at 1000 rows — paginate to get everything
       const BATCH = 1000
       let all = [], from = 0
       while (true) {
@@ -338,7 +608,6 @@ function ViolationsView({ period, managedDept, deptFilter, profiles }) {
   })
   const workers = Object.entries(byWorker).sort((a, b) => b[1].length - a[1].length)
 
-  // Most commonly detected app label
   const labelCounts = {}
   violations.forEach(v => {
     const m = matchesProhibited(v, patterns)
@@ -352,10 +621,8 @@ function ViolationsView({ period, managedDept, deptFilter, profiles }) {
     if (loadedImages[empId] !== undefined) return
     setLoadingImages(empId)
     const paths = (byWorker[empId] || []).map(v => v.path)
-    const urls  = window.electronAPI?.fetchScreenshotImages
-      ? await window.electronAPI.fetchScreenshotImages(paths)
-      : null
-    setLoadedImages(prev => ({ ...prev, [empId]: urls || [] }))
+    const urls  = await fetchScreenshotUrls(paths)
+    setLoadedImages(prev => ({ ...prev, [empId]: urls }))
     setLoadingImages(null)
   }
 
@@ -373,14 +640,13 @@ function ViolationsView({ period, managedDept, deptFilter, profiles }) {
 
   return (
     <>
-      {/* Violation stats */}
       <div className="rep-stats">
         <div className="rep-stat-card">
           <div className="rep-stat-icon" style={{ background: '#ef444412', color: '#ef4444' }}><ShieldAlert size={18} /></div>
           <div className="rep-stat-body"><span className="rep-stat-num" style={{ color: '#ef4444' }}>{violations.length}</span><span className="rep-stat-lbl">Violations Found</span></div>
         </div>
         <div className="rep-stat-card">
-          <div className="rep-stat-icon" style={{ background: '#f97316' + '12', color: '#f97316' }}><Users size={18} /></div>
+          <div className="rep-stat-icon" style={{ background: '#f9731612', color: '#f97316' }}><Users size={18} /></div>
           <div className="rep-stat-body"><span className="rep-stat-num" style={{ color: '#f97316' }}>{workers.length}</span><span className="rep-stat-lbl">Workers Flagged</span></div>
         </div>
         <div className="rep-stat-card">
@@ -415,24 +681,19 @@ function ViolationsView({ period, managedDept, deptFilter, profiles }) {
             <span className="rep-th" style={{ width: 90, textAlign: 'center' }}>Violations</span>
             <span className="rep-th" style={{ width: 160 }}>Last Detected</span>
             <span className="rep-th" style={{ flex: 1 }}>Apps Detected</span>
-            <button
-              className="rep-refresh-btn"
-              onClick={() => setRefreshKey(k => k + 1)}
-              disabled={loading}
-              title="Refresh violations"
-            >
+            <button className="rep-refresh-btn" onClick={() => setRefreshKey(k => k + 1)} disabled={loading} title="Refresh violations">
               {loading ? '…' : '↻ Refresh'}
             </button>
           </div>
 
           {workers.map(([empId, empViolations]) => {
-            const prof    = profiles[empId]
+            const prof   = profiles[empId]
             if (!prof) return null
-            const color   = deptColor(prof.department)
-            const isOpen  = expandedWorker === empId
-            const images  = loadedImages[empId] || []
-            const latest  = empViolations[0]
-            const labels  = [...new Set(empViolations.map(v => matchesProhibited(v, patterns)?.label).filter(Boolean))]
+            const color  = deptColor(prof.department)
+            const isOpen = expandedWorker === empId
+            const images = loadedImages[empId] || []
+            const latest = empViolations[0]
+            const labels = [...new Set(empViolations.map(v => matchesProhibited(v, patterns)?.label).filter(Boolean))]
 
             return (
               <div key={empId} className="rep-viol-block">
@@ -480,11 +741,9 @@ function ViolationsView({ period, managedDept, deptFilter, profiles }) {
                               onClick={() => imgUrl && setLightbox({ url: imgUrl, meta: v, matched })}
                               style={{ cursor: imgUrl ? 'pointer' : 'default' }}
                             >
-                              {imgUrl ? (
-                                <img src={imgUrl} alt="" className="rep-viol-thumb" />
-                              ) : (
-                                <div className="rep-viol-thumb-ph"><Camera size={20} style={{ color: 'var(--text-muted)' }} /></div>
-                              )}
+                              {imgUrl
+                                ? <img src={imgUrl} alt="" className="rep-viol-thumb" />
+                                : <div className="rep-viol-thumb-ph"><Camera size={20} style={{ color: 'var(--text-muted)' }} /></div>}
                               <div className="rep-viol-ss-info">
                                 <span className="rep-viol-ss-time">
                                   {new Date(v.taken_at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: NY })}
@@ -506,17 +765,13 @@ function ViolationsView({ period, managedDept, deptFilter, profiles }) {
         </div>
       )}
 
-      {/* Lightbox */}
       {lightbox && (
         <div className="rep-lightbox" onClick={() => setLightbox(null)}>
           <div className="rep-lb-inner" onClick={e => e.stopPropagation()}>
             <img src={lightbox.url} alt="" className="rep-lb-img" />
             <div className="rep-lb-meta">
               <div className="rep-lb-time">
-                {new Date(lightbox.meta.taken_at).toLocaleString('en-US', {
-                  weekday: 'long', month: 'long', day: 'numeric',
-                  hour: '2-digit', minute: '2-digit', timeZone: NY
-                })}
+                {new Date(lightbox.meta.taken_at).toLocaleString('en-US', { weekday: 'long', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: NY })}
               </div>
               {lightbox.matched && <span className="rep-viol-app-tag">{lightbox.matched.label}</span>}
               {lightbox.meta.active_app && <div className="rep-lb-app">{lightbox.meta.active_app}</div>}
@@ -531,9 +786,14 @@ function ViolationsView({ period, managedDept, deptFilter, profiles }) {
 }
 
 // ── By Worker view ────────────────────────────────────────────────────────────
-function WorkerView({ sessions, profiles, expandedWorker, setExpandedWorker }) {
+function WorkerView({ sessions, profiles, expandedWorker, setExpandedWorker, search, deptSchedules }) {
   const byWorker = {}
   sessions.forEach(s => {
+    const prof = profiles[s.employee_id]
+    if (search) {
+      const q = search.toLowerCase()
+      if (!(prof?.full_name || prof?.email || '').toLowerCase().includes(q) && !(prof?.department || '').toLowerCase().includes(q)) return
+    }
     if (!byWorker[s.employee_id]) byWorker[s.employee_id] = []
     byWorker[s.employee_id].push(s)
   })
@@ -542,10 +802,13 @@ function WorkerView({ sessions, profiles, expandedWorker, setExpandedWorker }) {
     a[1].reduce((s, x) => s + (Number(x.duration_hours) || 0), 0)
   )
 
+  if (workers.length === 0) return <div className="rep-state">No workers match your search.</div>
+
   return (
     <div className="rep-worker-wrap">
       <div className="rep-worker-head">
         <span className="rep-th">Employee</span>
+        <span className="rep-th rep-th-c">Days Worked</span>
         <span className="rep-th rep-th-c">Sessions</span>
         <span className="rep-th rep-th-c">Total Hours</span>
         <span className="rep-th rep-th-c">Avg Activity</span>
@@ -554,15 +817,17 @@ function WorkerView({ sessions, profiles, expandedWorker, setExpandedWorker }) {
       </div>
 
       {workers.map(([empId, empSessions]) => {
-        const prof    = profiles[empId]
+        const prof      = profiles[empId]
         if (!prof) return null
-        const done    = empSessions.filter(s => s.ended_at)
-        const totalH  = done.reduce((sum, s) => sum + (Number(s.duration_hours) || 0), 0)
-        const rate    = Number(prof.hourly_rate) || 0
-        const avgAct  = done.length ? Math.round(done.reduce((sum, s) => sum + (actPct(s) ?? 100), 0) / done.length) : null
-        const isOpen  = expandedWorker === empId
-        const color   = deptColor(prof.department)
-        const active  = empSessions.filter(s => !s.ended_at).length
+        const done      = empSessions.filter(s => s.ended_at)
+        const totalH    = done.reduce((sum, s) => sum + (Number(s.duration_hours) || 0), 0)
+        const rate      = Number(prof.hourly_rate) || 0
+        const avgAct    = done.length ? Math.round(done.reduce((sum, s) => sum + (actPct(s) ?? 100), 0) / done.length) : null
+        const isOpen    = expandedWorker === empId
+        const color     = deptColor(prof.department)
+        const active    = empSessions.filter(s => !s.ended_at).length
+        const daysWorked= new Set(empSessions.map(s => fmtDateKey(s.started_at))).size
+        const lateCount = empSessions.filter(s => checkLate(s.started_at, prof.department, deptSchedules)).length
 
         return (
           <div key={empId} className="rep-worker-block">
@@ -575,9 +840,18 @@ function WorkerView({ sessions, profiles, expandedWorker, setExpandedWorker }) {
                   <span className="rep-emp-meta" style={{ color }}>{prof.department || '—'}{prof.position ? ` · ${prof.position}` : ''}</span>
                 </div>
               </div>
-              <div className="rep-td rep-td-c">
+              <div className="rep-td rep-td-c" style={{ flexDirection: 'column', gap: 2 }}>
+                <span style={{ fontWeight: 600, fontSize: 14 }}>{daysWorked}</span>
+                <span style={{ fontSize: 11, color: '#94a3b8' }}>day{daysWorked !== 1 ? 's' : ''}</span>
+              </div>
+              <div className="rep-td rep-td-c" style={{ gap: 6 }}>
                 <span className="rep-sess-count">{empSessions.length}</span>
                 {active > 0 && <span className="rep-live-dot" title="Active now" />}
+                {lateCount > 0 && (
+                  <span title={`${lateCount} late clock-in${lateCount !== 1 ? 's' : ''}`} style={{ display: 'inline-block', padding: '1px 7px', borderRadius: 20, background: '#fef2f2', color: '#dc2626', fontSize: 11, fontWeight: 600, border: '1px solid #fecaca' }}>
+                    {lateCount}✕ Late
+                  </span>
+                )}
               </div>
               <div className="rep-td rep-td-c rep-mono">{totalH.toFixed(2)}h</div>
               <div className="rep-td rep-td-c">
@@ -601,6 +875,7 @@ function WorkerView({ sessions, profiles, expandedWorker, setExpandedWorker }) {
               <div className="rep-sessions-panel">
                 <div className="rep-sp-head">
                   <span className="rep-sth">Date</span>
+                  <span className="rep-sth">Status</span>
                   <span className="rep-sth">Clock In</span>
                   <span className="rep-sth">Clock Out</span>
                   <span className="rep-sth">Duration</span>
@@ -610,12 +885,22 @@ function WorkerView({ sessions, profiles, expandedWorker, setExpandedWorker }) {
                 </div>
                 {empSessions.map((s, i) => {
                   const isActive = !s.ended_at
+                  const late     = checkLate(s.started_at, prof.department, deptSchedules)
                   const hours    = Number(s.duration_hours) || 0
                   const idleMin  = Math.round((Number(s.accumulated_idle_secs) || 0) / 60)
                   const pct      = actPct(s)
                   return (
                     <div key={s.id} className={`rep-sp-row ${i % 2 === 1 ? 'rep-sp-odd' : ''} ${isActive ? 'rep-sp-active' : ''}`}>
                       <span className="rep-sd">{fmtDateLong(s.started_at)}</span>
+                      <span className="rep-sd">
+                        {late
+                          ? <span style={{ display: 'inline-block', padding: '2px 8px', borderRadius: 20, background: '#fef2f2', color: '#dc2626', fontSize: 11, fontWeight: 600, border: '1px solid #fecaca' }}>Late</span>
+                          : isActive
+                            ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 8px', borderRadius: 20, background: '#dcfce7', color: '#16a34a', fontSize: 11, fontWeight: 600 }}>
+                                <span style={{ width: 5, height: 5, borderRadius: '50%', background: '#16a34a' }} />Active
+                              </span>
+                            : <span style={{ display: 'inline-block', padding: '2px 8px', borderRadius: 20, background: '#f1f5f9', color: '#64748b', fontSize: 11 }}>On time</span>}
+                      </span>
                       <span className="rep-sd rep-mono">{fmtTime(s.started_at)}</span>
                       <span className="rep-sd rep-mono">{isActive ? <span className="rep-live-pill">● Active</span> : fmtTime(s.ended_at)}</span>
                       <span className="rep-sd rep-mono">{isActive ? <span className="rep-muted">—</span> : `${hours.toFixed(2)}h`}</span>
@@ -635,10 +920,21 @@ function WorkerView({ sessions, profiles, expandedWorker, setExpandedWorker }) {
 }
 
 // ── Sessions Log view ─────────────────────────────────────────────────────────
-function SessionsLog({ sessions, profiles }) {
+function SessionsLog({ sessions, profiles, search }) {
+  const searched = search
+    ? sessions.filter(s => {
+        const prof = profiles[s.employee_id]
+        const q = search.toLowerCase()
+        return (prof?.full_name || prof?.email || '').toLowerCase().includes(q)
+          || (prof?.department || '').toLowerCase().includes(q)
+      })
+    : sessions
+
   const byDate = {}
-  sessions.forEach(s => { const k = fmtDateKey(s.started_at); if (!byDate[k]) byDate[k] = []; byDate[k].push(s) })
+  searched.forEach(s => { const k = fmtDateKey(s.started_at); if (!byDate[k]) byDate[k] = []; byDate[k].push(s) })
   const sortedDates = Object.keys(byDate).sort((a, b) => b.localeCompare(a))
+
+  if (sortedDates.length === 0) return <div className="rep-state">No sessions match your search.</div>
 
   return (
     <div className="rep-log-wrap">
@@ -654,8 +950,8 @@ function SessionsLog({ sessions, profiles }) {
       </div>
       {sortedDates.map(dateKey => {
         const dateSessions = byDate[dateKey]
-        const dateHours  = dateSessions.filter(s => s.ended_at).reduce((sum, s) => sum + (Number(s.duration_hours) || 0), 0)
-        const dateEarned = dateSessions.filter(s => s.ended_at).reduce((sum, s) => sum + (Number(s.duration_hours) || 0) * (Number(profiles[s.employee_id]?.hourly_rate) || 0), 0)
+        const dateHours    = dateSessions.filter(s => s.ended_at).reduce((sum, s) => sum + (Number(s.duration_hours) || 0), 0)
+        const dateEarned   = dateSessions.filter(s => s.ended_at).reduce((sum, s) => sum + (Number(s.duration_hours) || 0) * (Number(profiles[s.employee_id]?.hourly_rate) || 0), 0)
         return (
           <div key={dateKey} className="rep-date-group">
             <div className="rep-date-hdr">
@@ -663,7 +959,7 @@ function SessionsLog({ sessions, profiles }) {
               <span className="rep-date-summary">{dateSessions.length} session{dateSessions.length !== 1 ? 's' : ''}&nbsp;·&nbsp;{dateHours.toFixed(1)}h&nbsp;·&nbsp;{fmtCurrency(dateEarned)}</span>
             </div>
             {dateSessions.map((s, i) => {
-              const prof    = profiles[s.employee_id]
+              const prof     = profiles[s.employee_id]
               if (!prof) return null
               const isActive = !s.ended_at
               const hours    = Number(s.duration_hours) || 0

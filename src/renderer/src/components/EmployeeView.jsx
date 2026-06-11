@@ -5,7 +5,7 @@ import {
   Coffee, UtensilsCrossed,
 } from 'lucide-react'
 import { supabase } from '../lib/supabase'
-import { syncServerTime, serverNow } from '../lib/serverTime'
+import { syncServerTime, serverNow, serverNowISO } from '../lib/serverTime'
 import { ServerClockFull } from './ServerClock'
 import ProfilePanel from './ProfilePanel'
 import UserAvatar from './UserAvatar'
@@ -100,12 +100,30 @@ export default function EmployeeView({ profile, onSignOut, deptSchedule }) {
   const salaryStartAtRef = useRef(null)
   const workEndMsRef = useRef(null) // ms timestamp for today's work_end (null = no cap)
 
+  // Early clock-out confirmation modal
+  const [earlyClockoutOpen, setEarlyClockoutOpen] = useState(false)
+  const [earlyInitials,     setEarlyInitials]     = useState('')
+  const [earlyReason,       setEarlyReason]       = useState('')
+
+  // Live 10-minute activity block (Hubstaff-style)
+  const [liveBlock, setLiveBlock] = useState(null) // { blockActiveSecs, blockTotalSecs, activityPct }
+
   useEffect(() => {
     window.electronAPI?.getVersion?.().then(v => { if (v) setAppVersion(v) })
     // Sync to server clock immediately, then every 5 minutes
     syncServerTime()
     const syncId = setInterval(syncServerTime, 5 * 60 * 1000)
     return () => clearInterval(syncId)
+  }, [])
+
+  // Save completed 10-min activity blocks to Supabase as they arrive from main process
+  useEffect(() => {
+    window.electronAPI?.onActivityBlock?.((block) => {
+      supabase.from('activity_blocks').insert(block).catch(() => {})
+    })
+    window.electronAPI?.onActivityTick?.((data) => {
+      setLiveBlock(data)
+    })
   }, [])
 
   useEffect(() => {
@@ -310,7 +328,7 @@ export default function EmployeeView({ profile, onSignOut, deptSchedule }) {
           .from('screenshots').upload(filename, bytes, { contentType: 'image/jpeg' })
         if (uploadErr) { setScreenshotStatus('upload_err:' + uploadErr.message); return }
         const { error: insertErr } = await supabase.from('screenshots')
-          .insert({ employee_id: profile.id, path: filename, taken_at: new Date().toISOString(), active_app: result.active_app || '', window_title: result.window_title || '' })
+          .insert({ employee_id: profile.id, path: filename, taken_at: serverNowISO(), active_app: result.active_app || '', window_title: result.window_title || '' })
         setScreenshotStatus(insertErr ? 'insert_err:' + insertErr.message : 'ok')
       } catch (e) {
         setScreenshotStatus('exception:' + (e?.message || 'unknown'))
@@ -400,13 +418,17 @@ export default function EmployeeView({ profile, onSignOut, deptSchedule }) {
       setSalaryStartAt(sStart)
       setActiveSession(data)
       setElapsed(Math.max(0, Math.floor((serverNow() - sStart) / 1000)))
+      window.electronAPI?.activityStart?.({ employeeId: fresh.id, sessionId: data.id })
     } else {
       window.electronAPI?.setTracking?.(false)
     }
     setClocking(false)
   }
 
-  async function clockOut() {
+  async function clockOut(earlyData = null) {
+    // Stop activity tracker immediately — captures the last partial block
+    const finalActivityBlock = await window.electronAPI?.activityStop?.() ?? null
+
     // Finalize any in-progress break before closing the session
     let finalBreakSecs = totalBreakRef.current
     let finalUnpaidSecs = totalUnpaidBreakRef.current
@@ -454,6 +476,7 @@ export default function EmployeeView({ profile, onSignOut, deptSchedule }) {
       break_count: finalBreakCount,
       coffee_count: coffeeCountRef.current,
       used_restroom_secs: restroomPaidUsedRef.current,
+      ...(earlyData ? { early_clockout_initials: earlyData.initials, early_clockout_reason: earlyData.reason } : {}),
     }).eq('id', activeSession.id)
     const { data: durationHours } = await supabase.rpc('clock_out_session', {
       p_session_id: activeSession.id,
@@ -475,7 +498,24 @@ export default function EmployeeView({ profile, onSignOut, deptSchedule }) {
     setRestroomPaidUsed(0)
     salaryStartAtRef.current = null
     setSalaryStartAt(null)
+    setLiveBlock(null)
+    // Persist final partial activity block (the incomplete 10-min window at clock-out)
+    if (finalActivityBlock?.total_seconds > 0) {
+      supabase.from('activity_blocks').insert(finalActivityBlock).catch(() => {})
+    }
     setClocking(false)
+  }
+
+  function handleClockOutRequest() {
+    if (!activeSession) return
+    const now = serverNow()
+    if (workEndMsRef.current && now < workEndMsRef.current) {
+      setEarlyInitials('')
+      setEarlyReason('')
+      setEarlyClockoutOpen(true)
+      return
+    }
+    clockOut()
   }
 
   function handleContinueWorking() {
@@ -689,7 +729,7 @@ export default function EmployeeView({ profile, onSignOut, deptSchedule }) {
             elapsed={elapsed} h={h} m={m} s={s}
             rate={rate} totalHours={totalHours}
             clocking={clocking}
-            clockIn={clockIn} clockOut={clockOut}
+            clockIn={clockIn} clockOut={handleClockOutRequest}
             isIdle={isIdle} activityPct={activityPct}
             activeSecs={activeSecs}
             breakStatus={breakStatus}
@@ -702,12 +742,28 @@ export default function EmployeeView({ profile, onSignOut, deptSchedule }) {
             currentBreakAllowance={currentBreakAllowance}
             startBreak={startBreak}
             endBreak={endBreak}
+            liveBlock={liveBlock}
           />
         )}
 
       {/* Idle overlay — shown on top of everything when user goes idle while clocked in */}
       {isIdle && activeSession && (
         <IdleModal idleStartAt={idleStartAt} onContinue={handleContinueWorking} />
+      )}
+
+      {/* Early clock-out confirmation */}
+      {earlyClockoutOpen && (
+        <EarlyClockOutModal
+          workEndMs={workEndMsRef.current}
+          workerName={fresh?.full_name || fresh?.email || ''}
+          initials={earlyInitials}
+          reason={earlyReason}
+          onInitialsChange={setEarlyInitials}
+          onReasonChange={setEarlyReason}
+          onConfirm={() => { setEarlyClockoutOpen(false); clockOut({ initials: earlyInitials.trim(), reason: earlyReason.trim() }) }}
+          onCancel={() => setEarlyClockoutOpen(false)}
+          clocking={clocking}
+        />
       )}
         {activeNav === 'profile' && <ProfilePanel profile={fresh} onUpdate={setFresh} />}
         {activeNav === 'faq' && <FAQPanel />}
@@ -742,6 +798,115 @@ function IdleModal({ idleStartAt, onContinue }) {
         <div className="idle-modal-timer">{timeStr}</div>
         <p className="idle-modal-sub">Away time will be deducted from your session earnings.</p>
         <button className="idle-continue-btn" onClick={onContinue}>▶ Continue Working</button>
+      </div>
+    </div>
+  )
+}
+
+// ── Early clock-out modal ─────────────────────────────────────────────────────
+function EarlyClockOutModal({ workEndMs, workerName, initials, reason, onInitialsChange, onReasonChange, onConfirm, onCancel, clocking }) {
+  const [now, setNow] = useState(serverNow)
+  useEffect(() => {
+    const id = setInterval(() => setNow(serverNow()), 1000)
+    return () => clearInterval(id)
+  }, [])
+  const minsLeft  = workEndMs ? Math.max(0, Math.round((workEndMs - now) / 60000)) : 0
+  const hoursLeft = Math.floor(minsLeft / 60)
+  const remMins   = minsLeft % 60
+  const timeLeft  = hoursLeft > 0 ? `${hoursLeft}h ${remMins}m` : `${remMins}m`
+  const endTimeStr= workEndMs ? new Date(workEndMs).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: 'America/New_York' }) : ''
+
+  const initialsOk = initials.trim().length >= 1 && initials.trim().length <= 6
+  const reasonOk   = reason.trim().length >= 5
+  const canConfirm = initialsOk && reasonOk && !clocking
+
+  return (
+    <div className="idle-overlay" style={{ zIndex: 1100, background: 'rgba(0,0,0,0.72)' }}>
+      <div className="idle-modal" style={{ maxWidth: 420, width: '90%', padding: '28px 28px 24px', gap: 0 }}>
+
+        {/* Icon */}
+        <div style={{ width: 56, height: 56, borderRadius: '50%', background: '#fff3cd', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 14px', fontSize: 26 }}>
+          ⏰
+        </div>
+
+        {/* Title */}
+        <h2 style={{ margin: '0 0 6px', fontSize: 18, fontWeight: 700, color: 'var(--text-primary)', textAlign: 'center' }}>
+          Leaving Early?
+        </h2>
+        <p style={{ margin: '0 0 16px', fontSize: 13, color: 'var(--text-muted)', textAlign: 'center', lineHeight: 1.5 }}>
+          Your shift ends at <strong style={{ color: 'var(--text-primary)' }}>{endTimeStr}</strong>.
+          {minsLeft > 0 && <> You still have <strong style={{ color: '#f59e0b' }}>{timeLeft}</strong> remaining.</>}
+        </p>
+
+        <div style={{ borderTop: '1px solid var(--border)', margin: '0 0 18px' }} />
+
+        <p style={{ margin: '0 0 16px', fontSize: 12, color: 'var(--text-muted)', textAlign: 'center' }}>
+          To confirm early clock-out, please sign below and provide a reason.
+        </p>
+
+        {/* Initials */}
+        <div style={{ marginBottom: 14 }}>
+          <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.5 }}>
+            Your Initials <span style={{ color: '#ef4444' }}>*</span>
+          </label>
+          <input
+            value={initials}
+            onChange={e => onInitialsChange(e.target.value.slice(0, 6))}
+            placeholder="e.g. A.B. or AB"
+            maxLength={6}
+            autoFocus
+            style={{
+              width: '100%', boxSizing: 'border-box',
+              padding: '9px 12px', borderRadius: 8,
+              border: `1.5px solid ${initialsOk || !initials ? 'var(--border)' : '#ef4444'}`,
+              background: 'var(--surface)', color: 'var(--text-primary)',
+              fontSize: 20, fontWeight: 700, letterSpacing: 4, textAlign: 'center',
+              outline: 'none', fontFamily: 'monospace',
+            }}
+          />
+          <p style={{ margin: '4px 0 0', fontSize: 11, color: 'var(--text-muted)' }}>
+            Type your initials as your electronic signature
+          </p>
+        </div>
+
+        {/* Reason */}
+        <div style={{ marginBottom: 20 }}>
+          <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.5 }}>
+            Reason for Leaving Early <span style={{ color: '#ef4444' }}>*</span>
+          </label>
+          <textarea
+            value={reason}
+            onChange={e => onReasonChange(e.target.value)}
+            placeholder="Please explain why you are leaving before your scheduled shift end…"
+            rows={3}
+            style={{
+              width: '100%', boxSizing: 'border-box',
+              padding: '9px 12px', borderRadius: 8,
+              border: `1.5px solid ${reasonOk || !reason ? 'var(--border)' : '#ef4444'}`,
+              background: 'var(--surface)', color: 'var(--text-primary)',
+              fontSize: 13, resize: 'vertical', outline: 'none', lineHeight: 1.5,
+              fontFamily: 'inherit',
+            }}
+          />
+        </div>
+
+        {/* Buttons */}
+        <div style={{ display: 'flex', gap: 10 }}>
+          <button
+            onClick={onCancel}
+            disabled={clocking}
+            style={{ flex: 1, padding: '10px', borderRadius: 8, border: '1.5px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)', fontSize: 13, fontWeight: 500, cursor: 'pointer' }}
+          >
+            Stay & Continue
+          </button>
+          <button
+            onClick={onConfirm}
+            disabled={!canConfirm}
+            style={{ flex: 1, padding: '10px', borderRadius: 8, border: 'none', background: canConfirm ? '#dc2626' : '#94a3b8', color: '#fff', fontSize: 13, fontWeight: 700, cursor: canConfirm ? 'pointer' : 'default', transition: 'background 0.15s' }}
+          >
+            {clocking ? 'Clocking Out…' : 'Confirm Clock Out'}
+          </button>
+        </div>
       </div>
     </div>
   )
@@ -794,7 +959,7 @@ function BreakTimer({ breakStartAt, breakStatus, paidAllowanceSecs }) {
 }
 
 // ── Dashboard ────────────────────────────────────────────────────────────────
-function DashboardPanel({ fresh, activeSession, elapsed, h, m, s, rate, totalHours, clocking, clockIn, clockOut, isIdle, activityPct, activeSecs, breakStatus, breakStartAt, breakCount, coffeeCount, restroomPaidUsed, salaryStartAt, workEndMs, currentBreakAllowance, startBreak, endBreak }) {
+function DashboardPanel({ fresh, activeSession, elapsed, h, m, s, rate, totalHours, clocking, clockIn, clockOut, isIdle, activityPct, activeSecs, breakStatus, breakStartAt, breakCount, coffeeCount, restroomPaidUsed, salaryStartAt, workEndMs, currentBreakAllowance, startBreak, endBreak, liveBlock }) {
   const now            = serverNow()
   const waitingForWork = activeSession && elapsed === 0 && salaryStartAt && salaryStartAt > now
   const salaryEnded    = activeSession && workEndMs && now > workEndMs
@@ -986,6 +1151,33 @@ function DashboardPanel({ fresh, activeSession, elapsed, h, m, s, rate, totalHou
           </div>
         </div>
       )}
+
+      {/* Live 10-minute activity block */}
+      {activeSession && liveBlock && liveBlock.blockTotalSecs >= 10 && (() => {
+        const pct      = liveBlock.activityPct
+        const secsLeft = Math.max(0, 600 - liveBlock.blockTotalSecs)
+        const minsLeft = Math.floor(secsLeft / 60)
+        const pctColor = pct >= 80 ? 'var(--positive)' : pct >= 50 ? '#f59e0b' : 'var(--negative)'
+        return (
+          <div className="activity-bar-wrap" style={{ marginTop: 8 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: 'var(--text-muted)', marginBottom: 4 }}>
+              <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                <Activity size={11} />
+                Current 10-min block
+                {liveBlock.wasIdle && <span style={{ color: '#f59e0b', marginLeft: 4 }}>· idle detected</span>}
+              </span>
+              <span style={{ color: pctColor, fontWeight: 600 }}>{pct}%</span>
+            </div>
+            <div className="activity-track">
+              <div className="activity-fill" style={{ width: `${pct}%`, background: pctColor }} />
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
+              <span>{liveBlock.blockActiveSecs}s active / {liveBlock.blockTotalSecs}s elapsed</span>
+              <span>{minsLeft > 0 ? `${minsLeft}m left` : 'block ending…'}</span>
+            </div>
+          </div>
+        )
+      })()}
 
       <EmployeeTransactions employeeId={fresh.id} />
     </div>

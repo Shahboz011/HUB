@@ -1,0 +1,27 @@
+# Supabase CLI config. `project_id` is the *local* project name; the actual
+# linked cloud project ref is set by `supabase link --project-ref <ref>`.
+project_id = "pharmastaff-hub"
+
+[db]
+major_version = 15
+
+[functions.admin-invite-member]
+verify_jwt = false
+
+[functions.admin-delete-member]
+verify_jwt = false
+
+[functions.admin-update-member]
+verify_jwt = false
+
+[functions.admin-update-department]
+verify_jwt = false
+
+[functions.admin-manage-transaction]
+verify_jwt = false
+
+[functions.admin-clear-employee]
+verify_jwt = false
+
+[functions.admin-get-screenshot-urls]
+verify_jwt = false
